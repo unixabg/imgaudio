@@ -1,0 +1,37 @@
+# Python virtual environment
+.venv/
+__pycache__/
+*.pyc
+
+# Input/output directories — too big and easily regenerated
+frames/
+out/
+diff/
+backup/
+
+# Generated outputs
+*.wav
+*.png
+*.jpg
+*.mp3
+*.flac
+*.opus
+*.mid
+
+# Vim
+*.swp
+*.swo
+*.swn
+*~
+.*.swp
+.*.swo
+.*.swn
+Session.vim
+.netrwhist
+tags
+
+# Editor noise
+.vscode/
+.idea/
+*.swp
+.DS_Store

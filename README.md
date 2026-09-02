@@ -36,6 +36,7 @@ imgaudio-batch.sh        encode every frame
 imgaudio-diff-batch.sh   per-frame diffs + change_log.txt
 lens_recursion.sh        feed an image through lenses N times
 knobs.sh                 sweep anomaly.py settings on one file
+examples/                tuning-demo.sh, voice-stack.sh
 frames/  out/  flow/     data (gitignored)
 ```
 
@@ -47,6 +48,45 @@ python3 notate.py notes tmp.wav melody.wav --midi melody.mid
 ```
 
 ~5 seconds. `melody.wav` plays immediately; `melody.mid` opens in a DAW.
+
+## Starting from audio instead
+
+Any WAV works, whether or not it came from this pipeline.
+
+```bash
+python3 imgaudio.py --rows 400 --cols 800 decode mystery.wav look.png
+```
+
+No lens, no other flags — `--lens raw` is the default and shows the honest
+spectrogram. If the audio was produced by `imgaudio.py encode`, the picture
+reappears. If it wasn't, you get a real image of the sound's structure.
+`--base` is a `notate.py` flag and has no effect here.
+
+Trim long files first, or the image comes out absurdly wide:
+`sox mystery.wav short.wav trim 0 30`. Twenty to sixty seconds reads well.
+
+Two failure modes: content squashed at the bottom means the audio sits below
+the default 80–8000 Hz band, so try `--f-lo 40 --f-hi 4000`; a flat gray field
+means the audio is too self-similar at that resolution, so drop to
+`--rows 200 --cols 400`.
+
+Once you've seen the honest version, the lenses are purely aesthetic — you're
+not undoing anything, just choosing how to render it:
+
+```bash
+for L in raw edges fractal phyllotaxis spectral; do
+  python3 imgaudio.py --rows 400 --cols 800 --lens $L decode short.wav "look_$L.png"
+done
+montage look_*.png -tile 3x -geometry 400x -label '%f' sheet.png
+```
+
+Output is grayscale throughout — audio has one magnitude per frequency, and
+colour needs three channels. To add colour afterwards:
+
+```bash
+convert look.png -auto-level \
+    \( -size 1x256 gradient:'#440154-#fde725' -rotate 90 \) -clut viridis.png
+```
 
 ## Full workflow
 
@@ -186,6 +226,54 @@ Standard MIDI notes are equal-tempered integers, so `--midi` rounds base-60
 pitches to the nearest semitone. The WAV carries the true tuning; the `.mid` is
 an approximation.
 
+### Hearing the difference
+
+```bash
+./examples/tuning-demo.sh input.jpg
+for f in tuning_demo/*.wav; do echo "$f"; play -q "$f"; done
+```
+
+Five transcriptions of one source with everything held constant except the
+tuning. `10_minor_pent` and `60_babylonian` should sound nearly identical;
+`60_harmonic` should sound audibly other. The script prints each one's
+`--verify` fidelity so you can compare what the metric says against what you
+hear. They don't always agree.
+
+## Keeping the source underneath
+
+`notate.py` discards the source entirely — it extracts pitch events and
+synthesizes fresh tones, so an image encoded into the input is gone by the time
+notes come out. Decoding a `notate.py` output shows a picture of a vibraphone
+performance, not of a photograph.
+
+`--dry-mix` layers the original underneath the notes instead:
+
+```bash
+python3 notate.py notes src.wav out.wav --dry-mix 0.4
+```
+
+It recovers nothing — but the source still carries whatever encoded it, so
+decoding the result partly shows the picture again. Correlation with the
+original photo rises from 0.376 at `--dry-mix 0.0` to 0.501 at `0.6`. Around
+0.3–0.5 gives an audible melodic line over a legible image.
+
+```bash
+for M in 0.0 0.3 0.6; do
+  python3 notate.py notes src.wav "dry$M.wav" --dry-mix $M
+  python3 imgaudio.py --rows 400 --cols 800 decode "dry$M.wav" "dry$M.png"
+done
+montage dry*.png -tile 1x -geometry 800x -label '%f' compare.png
+```
+
+`--verify` measures the pure transcription rather than the blend, so the
+fidelity number stays honest regardless of the mix.
+
+A residual sidecar (source minus synthesis, saved for later re-addition) was
+considered and rejected. It reconstructs exactly, but the best-fit scale for
+the synthesis is ~0 — the notes match the source spectrally while their phases
+are unrelated. The residual therefore carries 100% of the source's energy and
+is the same size as just keeping the original.
+
 ## Measuring what survives
 
 Transcription is lossy by design. Scale snapping, grid quantization, the
@@ -228,7 +316,9 @@ peaks collide onto the same symbol.
 
 **Dominates everything else: source type.** Spectral-lens drone scores ~0.74;
 a field recording of frogs scores ~0.38. Which scale you pick is worth ~0.02.
-What you feed it is worth ~0.35.
+What you feed it is worth ~0.35. Broadband, inharmonic material has no clear
+fundamental for the peak picker to lock onto — the frog recording yielded only
+8 distinct pitches from 83 notes.
 
 **Does not replicate.** On the original source, `harmonic` (0.737) beat
 `just_major` (0.721) and `babylonian` (0.717). Retested on four other files,
@@ -287,6 +377,7 @@ Baseline for comparison: raw drone, base 10, `minor_pent`, defaults → 0.470.
 | `--peak-rel` | 0.25 | density dial; lower = many more notes |
 | `--decay` | 2.5 | lower = longer sustain |
 | `--program` | 11 | GM instrument: 0 piano, 11 vibes, 46 harp, 89 pad |
+| `--dry-mix` | 0.0 | blend this much source back under the notes |
 | `--verify` | off | report how much of the source survived |
 | `--transcribe-opts` | — | key=value extension point |
 
@@ -298,6 +389,20 @@ Baseline for comparison: raw drone, base 10, `minor_pent`, defaults → 0.470.
 | `--bands` | 64 | spectral bands per frame vector; higher sharpens striping |
 | `--mode` | continuous | `binary` with `--percentile` gives the stark print look |
 | `--discords` | 0 | also print the N most anomalous timestamps |
+
+## Examples
+
+**`examples/tuning-demo.sh IMAGE`** — five transcriptions of one source with
+only the tuning varying, each with its `--verify` score. The fastest way to
+hear what `--base 60` means.
+
+**`examples/voice-stack.sh INPUT.wav [OUT_DIR] [MAX_PRIME] [--layer]`** —
+transcribes one file at each prime `--voices` value, then joins them.
+Sequential by default (sparse to dense, the progression audible as form);
+`--layer` mixes them simultaneously instead. Caps at 40 because note count
+peaks near `--voices 37` and declines after — low-amplitude peaks jitter
+between neighbouring bins and merge into fewer, longer notes rather than more
+of them.
 
 ## Writing a lens
 
@@ -326,12 +431,17 @@ Auto-discovered, no registration. Two rules learned the hard way:
 - Encode and decode must use the same `--rows`, `--cols`, `--f-lo`, `--f-hi`.
 - A lens during encode means the round-trip reconstructs what the lens *saw*,
   not the original. That's the point, but it surprises you the first time.
+- **`notate.py` output cannot be decoded back to a picture.** It's a branch off
+  the pipeline, not a stage in it — the notes are synthesized from scratch and
+  the source is gone. Use `--dry-mix` if you need the image to survive.
 - `--base 60` with a base-10 scale name exits with "unknown scale". The default
   `minor_pent` is auto-swapped for `babylonian_pent`, but other base-10 names
   will fail — run `notate.py scales` to see both tables.
 - The `spectral` lens output is conjugate-symmetric, so its audio has partials
   in mirrored pairs and sounds unusually consonant for reasons that have
   nothing to do with the picture. Use `mode=quadrant` to break the symmetry.
+- Everything is grayscale. Audio has one magnitude per frequency; colour needs
+  three channels. Add it afterwards with ImageMagick's `-clut`.
 - `matplotlib: divide by zero in log10` on silent bins — harmless.
 - Badly clipped sources need help beyond `--auto-prep`:
   `convert in.jpg -colorspace Gray -negate -level 0%,30%,1.2 prepped.jpg`
@@ -340,6 +450,9 @@ Auto-discovered, no registration. Two rules learned the hard way:
 - Transcribing `notate.py` output scores deceptively high (~0.89). The source
   is already sparse, pitched, and quantized, so `--verify` measures
   self-consistency rather than channel capacity. Test on unfamiliar material.
+- `voice-stack.sh` takes a `.wav`, not an image, and its second argument is the
+  output directory rather than the prime cap. Both mistakes now error out
+  rather than failing silently.
 
 ## The tradeoff
 

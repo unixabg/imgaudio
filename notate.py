@@ -475,7 +475,25 @@ def cmd_notes(args):
               f"(max {np.max(dev):.1f})")
 
     out = synthesize(notes, args.bpm, decay=args.decay)
+    dry_only = out                  # keep the pure transcription for --verify
+
+    if args.dry_mix > 0.0:
+        # Blend the source back in underneath the transcription. This does not
+        # recover anything — it layers the original beneath the notes. Because
+        # the source still carries whatever image encoded it, decoding the
+        # result will partly show that picture again.
+        dry = resample(audio, int(len(audio) * 44100 / sr))
+        n = max(len(out), len(dry))
+        out = np.pad(out, (0, n - len(out)))
+        dry = np.pad(dry, (0, n - len(dry)))
+        out = (1.0 - args.dry_mix) * out + args.dry_mix * dry
+        peak = np.max(np.abs(out))
+        if peak > 0:
+            out = out / peak * 0.85
+        print(f"  dry mix: {args.dry_mix:.0%} source under the notes")
+
     wavfile.write(args.output, 44100, (out * 32767).astype(np.int16))
+
     print(f"wrote {args.output}  ({len(out)/44100:.1f}s)")
 
     if args.midi:
@@ -484,7 +502,10 @@ def cmd_notes(args):
         print(f"wrote {args.midi}  (GM program {args.program}){note}")
 
     if args.verify:
-        report_verification(audio, sr, notes, out, 44100, args.base)
+        # Measure the transcription itself, not the dry-mixed blend — mixing
+        # the source back in would inflate the score without the notes
+        # carrying any more information.
+        report_verification(audio, sr, notes, dry_only, 44100, args.base)
 
     if args.print_notes:
         print("\n  beat   dur       Hz  near   cents  vel")
@@ -540,6 +561,12 @@ def build_parser():
     pn.add_argument("--transcribe-opts", default="",
                     help="comma-separated key=value options; extension point "
                          "for settings that don't warrant their own flag")
+    pn.add_argument("--dry-mix", type=float, default=0.0,
+                    help="blend this fraction of the source audio back under "
+                         "the transcription (0.0-1.0). Layers the original "
+                         "beneath the notes; does not recover anything, but "
+                         "the source underneath still carries whatever image "
+                         "encoded it")
     pn.add_argument("--print-notes", type=int, default=0,
                     help="print the first N notes")
 

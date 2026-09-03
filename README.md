@@ -80,8 +80,8 @@ done
 montage look_*.png -tile 3x -geometry 400x -label '%f' sheet.png
 ```
 
-Output is grayscale throughout — audio has one magnitude per frequency, and
-colour needs three channels. To add colour afterwards:
+Output is grayscale unless the audio was encoded with `--color` (see below).
+To colourize arbitrary audio afterwards:
 
 ```bash
 convert look.png -auto-level \
@@ -195,6 +195,34 @@ ffmpeg -i year_music.wav -c:a libopus -b:a 96k year_music.opus
 For very large sets, `sox out/*.wav` overflows the argument list — use
 `ls out/*.wav | sort | sed 's|^|file |' > list.txt` then
 `ffmpeg -f concat -safe 0 -i list.txt -c copy year.wav`.
+
+## Colour
+
+The audio carries luminance only — one magnitude per frequency, and colour
+needs three channels. `--color` stores the colour in a small sidecar PNG
+beside the WAV and reapplies it on decode.
+
+```bash
+python3 imgaudio.py --auto-prep --color encode photo.jpg photo.wav
+# writes photo.wav and photo.chroma.png (~450-700 bytes)
+
+python3 imgaudio.py --color decode photo.wav recovered.png
+```
+
+Human vision has far lower colour resolution than luminance resolution, which
+is why JPEG and every video codec subsample chroma. A 32-pixel-wide chroma
+plane is near-lossless to the eye:
+
+| `--color-width` | sidecar size | RMSE vs original |
+|---|---|---|
+| 32 (default) | ~450–700 B | 0.025 |
+| 16 | ~193 B | 0.029 |
+| 8 | ~119 B | 0.032 |
+
+The audio is byte-identical with and without `--color` — the flag only adds
+the sidecar, so files encoded either way are interchangeable as audio. The
+sidecar records whether `--auto-prep` inverted the frame, so decode flips the
+recovered luminance back to match the chroma's orientation.
 
 ## Tuning systems
 
@@ -362,6 +390,8 @@ Baseline for comparison: raw drone, base 10, `minor_pent`, defaults → 0.470.
 | `--col-sec` | 0.05 | seconds per column |
 | `--f-lo` / `--f-hi` | 80 / 8000 | frequency band, Hz |
 | `--gamma` | 1.7 | contrast; higher = starker |
+| `--color` | off | write/read a chroma sidecar so decode returns colour |
+| `--color-width` | 32 | chroma sidecar width; 8–32 all look reasonable |
 | `--lossless` | off | byte-exact archive; audio is harsh noise |
 | `--no-normalize` | off | needed for clean diffs |
 | `--lens` / `--lens-params` | raw | apply a lens |
@@ -427,21 +457,23 @@ Auto-discovered, no registration. Two rules learned the hard way:
 
 ## Gotchas
 
-- `--lossless` ignores lenses and all spectrogram parameters. It's a byte copy.
+- `--lossless` ignores lenses, colour, and all spectrogram parameters. It's a
+  byte copy — the original file already has its colour.
 - Encode and decode must use the same `--rows`, `--cols`, `--f-lo`, `--f-hi`.
 - A lens during encode means the round-trip reconstructs what the lens *saw*,
   not the original. That's the point, but it surprises you the first time.
 - **`notate.py` output cannot be decoded back to a picture.** It's a branch off
   the pipeline, not a stage in it — the notes are synthesized from scratch and
   the source is gone. Use `--dry-mix` if you need the image to survive.
+- `--color` on decode without a matching `.chroma.png` warns and falls back to
+  grayscale. The sidecar must sit beside the WAV with the same stem, so move
+  or copy them together.
 - `--base 60` with a base-10 scale name exits with "unknown scale". The default
   `minor_pent` is auto-swapped for `babylonian_pent`, but other base-10 names
   will fail — run `notate.py scales` to see both tables.
 - The `spectral` lens output is conjugate-symmetric, so its audio has partials
   in mirrored pairs and sounds unusually consonant for reasons that have
   nothing to do with the picture. Use `mode=quadrant` to break the symmetry.
-- Everything is grayscale. Audio has one magnitude per frequency; colour needs
-  three channels. Add it afterwards with ImageMagick's `-clut`.
 - `matplotlib: divide by zero in log10` on silent bins — harmless.
 - Badly clipped sources need help beyond `--auto-prep`:
   `convert in.jpg -colorspace Gray -negate -level 0%,30%,1.2 prepped.jpg`

@@ -88,6 +88,103 @@ convert look.png -auto-level \
     \( -size 1x256 gradient:'#440154-#fde725' -rotate 90 \) -clut viridis.png
 ```
 
+## Rendering a recipe
+
+`render.py` runs the whole pipeline from a small TOML recipe, so you don't have
+to remember flags or keep encode and decode settings in step by hand.
+
+```bash
+python3 render.py recipes/example.toml --dry-run    # see the plan first
+python3 render.py recipes/example.toml              # render it
+```
+
+Outputs land in `renders/<recipe name>/`, one set of files per source:
+
+| file | what it is |
+|---|---|
+| `NAME.wav` | the encoded (or converted) audio |
+| `NAME.chroma.png` | colour sidecar, with `color = true` |
+| `NAME.png` | decode — the photo round-trip, or a recording's spectrogram |
+| `NAME.notes.wav` / `.mid` | the transcription |
+| `NAME.notes.png` | decode of the transcription — a picture of the performance |
+| `NAME.verify.json` | fidelity figures for this source |
+| `report.csv` | one row per source, with a summary printed at the end |
+| `recipe.toml` | a copy of the recipe, so the piece ships with how it was made |
+
+Sections you write are stages you get: encode and decode always run; notate
+runs when `[notate]` is present; assembly runs when `[assemble]` is present.
+Any stage can be switched off with `enabled = false`. Recipe keys are the
+tools' own flags with underscores (`--auto-prep` becomes `auto_prep`), and an
+unknown key is an error, so a typo can't silently fall back to a default.
+
+**Resumable and safe to interrupt.** Finished outputs are skipped, and each job
+renders into a private temp folder before moving results into place, so a
+killed run never leaves a half-written file behind.
+
+**Change a setting, rerun, and only what's affected is redone.** Each stage's
+settings are hashed. Change `[notate]` and the encodes are kept; change
+`[encode]` and everything reruns.
+
+### Recordings as sources
+
+Any sound file ffmpeg can read works as a source: WAV, MP3, M4A (phone
+recordings), FLAC, OGG. There's no hidden photo in an ordinary recording, so
+decode shows the sound's own structure.
+
+```toml
+[source]
+audio = "recordings/*"
+
+[decode]
+palette = "magma"
+```
+
+- **The frequency band is detected automatically** from where the recording's
+  energy actually sits, so a birdsong fills the frame instead of occupying a
+  thin strip. Set `[audio] f_lo` and `f_hi` to fix it instead.
+- **Long recordings are split into equal tiles**, 30 seconds by default
+  (`[audio] tile`), named `NAME.t001`, `NAME.t002`, ... and laid out in reading
+  order in `NAME.sheet.png`.
+- **Colour comes from a palette** — `viridis`, `magma`, `inferno`, or a list
+  of hex colours — since there's no photo to take it from.
+
+`recipes/recordings.toml` is a commented starting point. Images and recordings
+can be mixed in one recipe.
+
+### Across a fleet
+
+With the output folder on shared storage:
+
+```bash
+python3 render.py recipes/year.toml --prepare        # once, from one machine
+python3 render.py recipes/year.toml --shard 3/40     # on each worker
+python3 render.py recipes/year.toml                  # once more, to assemble
+```
+
+`--prepare` clears stale outputs and analyzes every recording once, so workers
+don't each repeat it. Workers take interleaved slices, so each gets a spread
+across the whole timeline. A worker refuses to start if the recipe changed
+since the last `--prepare`, rather than deleting files other workers may be
+using.
+
+### render.py gotchas
+
+- Colour only lines up with lenses that keep things where they were: `raw`,
+  `edges`, `fractal`. With `spectral` or `phyllotaxis` the decode has a
+  different layout from the photo, so the colour tints rather than recovers.
+  `render.py` warns when you combine them.
+- Each tile of a recording is brightness-normalized on its own, so loudness
+  differences between tiles don't show in the contact sheet.
+- A dark frame or silent tile has nothing to transcribe. It becomes silence
+  of the right length rather than a failure, so the assembled timeline keeps
+  its shape.
+- Assembling `from = "source"` with both images and recordings needs matching
+  sample rates: set `[audio] sr` to match `[encode] sr` (both default to
+  22050).
+- A hard kill (power loss, `kill -9`) can leave a stray folder in `.tmp/`.
+  It's harmless, and `--prepare` sweeps it up.
+
+
 ## Full workflow
 
 **1. Collect frames.** Name them so alphabetical = chronological:
@@ -497,3 +594,11 @@ are different objectives. `just_pent` scores worst of the base-60 scales
 (0.657) despite being the prettiest — five degrees isn't enough resolution to
 carry a signal. The metric tells you what got through, not whether it was
 worth transmitting.
+
+## Acknowledgements
+
+Built in collaboration with Claude (Anthropic), which wrote much of the code
+and helped test it. The ideas and direction — the year of frames, lenses as
+nature's pattern-finders, base-60 tuning, keeping the source underneath the
+notes, the colour sidecar, and the Chromebook render farm — came from the
+author, as did the judgement about which results actually held up.

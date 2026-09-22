@@ -1,0 +1,44 @@
+# example.toml — a recipe for render.py
+#
+#   python3 render.py recipes/example.toml
+#
+# Outputs land in renders/example/ (override with [output] dir = "...").
+# Sections you write are stages you get: encode and decode always run,
+# notate and notes_decode run when [notate] is present, assemble runs when
+# [assemble] is present. Any stage can be switched off with enabled = false.
+#
+# Keys are the tools' own flags with underscores: --auto-prep -> auto_prep.
+# Unknown keys are an error, so a typo can't silently fall back to a default.
+
+[source]
+frames = "frames/*.jpg"             # a glob, or a list of globs
+
+[encode]
+auto_prep = true                    # essential for outdoor photos
+rows = 300
+cols = 600
+color = true                        # ~500-byte sidecar; decode returns colour
+# lens = "spectral"                 # scored best for transcription, but it
+# lens_params = { mode = "quadrant" } # rearranges the image, so colour won't
+#                                   # line up — use square rows/cols with it
+
+[decode]
+# lens = "edges"                    # optional stylistic lens on the way back
+# palette = "viridis"               # colours grayscale decodes (colour = true wins)
+
+[notate]
+base = 60                           # just intonation
+scale = "harmonic"
+voices = 7
+grid = 16
+dry_mix = 0.4                       # keep the photo underneath the notes
+midi = true
+# verify = true                     # default; feeds report.csv
+
+[notes_decode]
+# color = true                      # default: on when dry_mix > 0
+# trim = true                       # default: trim notate's ringing tail
+
+[assemble]
+from = "notes"                      # or "source" for the plain drones
+output = "example.wav"              # .opus or .flac also work

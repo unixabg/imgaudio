@@ -8,6 +8,8 @@ frames/
 out/
 diff/
 backup/
+renders/
+recordings/
 
 # Generated outputs
 *.wav

@@ -1,0 +1,32 @@
+# recordings.toml — turn sound files into pictures (and optionally notes).
+#
+#   python3 render.py recipes/recordings.toml
+#
+# Anything ffmpeg reads works: wav, mp3, m4a (phone recordings), flac, ogg.
+# There's no hidden photo in an ordinary recording, so decode shows the
+# sound's own structure. Long files are split into equal tiles and laid out
+# in reading order in NAME.sheet.png.
+
+[source]
+audio = "recordings/*"              # a glob, or a list of globs
+
+[audio]
+tile = 30                           # seconds per tile; 0 = never split
+# f_lo = "auto"                     # default: measured from the recording
+# f_hi = "auto"                     #   set numbers to fix the band instead
+# rows = 300                        # image height
+# cols = 600                        # image width per tile
+# sheet_columns = 4                 # tiles per row in the contact sheet
+
+[decode]
+palette = "magma"                   # viridis, magma, inferno, gray,
+                                    # or a list: ["#0d0221", "#ff6b35"]
+# lens = "edges"                    # optional stylistic lens
+
+# Uncomment to also transcribe each tile into notes. Harmonic sounds (voices,
+# instruments) transcribe far better than noisy ones (rain, crowds).
+# [notate]
+# base = 60
+# scale = "harmonic"
+# voices = 7
+# grid = 16

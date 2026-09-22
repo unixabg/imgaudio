@@ -1,0 +1,33 @@
+# sweep.toml — try many settings on the same sources and rank them.
+#
+#   python3 render.py recipes/sweep.toml --dry-run    # count the combinations
+#   python3 render.py recipes/sweep.toml
+#
+# Everything outside [sweep] is the base recipe. Each [sweep.<section>] key
+# lists values to try; render.py renders every combination into its own
+# folder (v001, v002, ...) and writes sweep.csv ranking them by how much of
+# the source survived transcription.
+#
+# Variants sharing encode settings share an encode folder, so a photo is
+# encoded once per lens rather than once per combination. Combinations that
+# can't exist (a base-60 scale with base 10) are skipped with a note.
+#
+# Start small: combinations multiply. 2 lenses x 2 bases x 2 scales x 2
+# voices is 16, less the 4 impossible ones — on 3 images that's 36 renders.
+
+[source]
+frames = "frames/*.jpg"
+
+[encode]
+auto_prep = true
+rows = 300
+cols = 300          # square, since the spectral lens produces a square image
+
+[notate]
+base = 60
+scale = "harmonic"
+grid = 16
+
+[sweep.encode]
+lens = ["raw", "edges", "fractal", "spectral"]
+

@@ -53,9 +53,11 @@ Dependencies: Python 3.11+ (tomllib), numpy, scipy, Pillow, ffmpeg + ffprobe.
 
 import argparse
 import concurrent.futures as cf
+import copy
 import csv
 import glob
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -147,9 +149,11 @@ def load_recipe(path):
     with open(path, "rb") as fp:
         r = tomllib.load(fp)
     for sec, val in r.items():
+        if sec == "sweep":
+            continue                      # nested; expand_variants validates
         if sec not in SECTIONS:
             sys.exit(f"recipe: unknown section [{sec}]. "
-                     f"known: {', '.join(SECTIONS)}")
+                     f"known: {', '.join(SECTIONS)}, sweep")
         if sec == "encode" and "lossless" in val:
             sys.exit("recipe: lossless is an archive format, not a render — "
                      "use imgaudio.py --lossless directly")
@@ -368,16 +372,16 @@ def tile_names(stem, duration, tile):
     return names, duration / n
 
 
-def plan_path(out, src):
-    return out / f"{src.stem}.plan.json"
+def plan_path(encdir, src):
+    return encdir / f"{src.stem}.plan.json"
 
 
-def plan_audio(src, out, r):
+def plan_audio(src, encdir, r):
     """Duration, tile names, and detected band for one recording. Cached in
     NAME.plan.json, keyed on the settings that affect it."""
     a = audio_cfg(r)
     key = _h(_conv_part(r))
-    pf = plan_path(out, src)
+    pf = plan_path(encdir, src)
     if pf.exists():
         plan = json.loads(pf.read_text())
         if plan.get("key") == key:
@@ -391,11 +395,11 @@ def plan_audio(src, out, r):
     return plan
 
 
-def output_names(src, out):
+def output_names(src, encdir):
     """Names this source's outputs use. Recordings need their plan."""
     if src.kind == "image":
         return [src.stem]
-    pf = plan_path(out, src)
+    pf = plan_path(encdir, src)
     return json.loads(pf.read_text())["tiles"] if pf.exists() else []
 
 
@@ -411,13 +415,15 @@ def probe_duration(path):
 # ---------------------------------------------------------------------------
 # Invalidation
 # ---------------------------------------------------------------------------
-def check_hashes(out, keys, sources, recipe_path, *, sharded, prepare):
+def check_hashes(out, keys, sources, recipe_path, *, sharded, prepare,
+                 encdir=None, copy_recipe=True):
     """Compare stored stage hashes, delete stale outputs, record new hashes.
 
     Sharded workers never delete: several machines deleting on shared storage
     while others render would race. They refuse instead and ask for
     --prepare, which is run once from one machine before launching.
     """
+    encdir = encdir or out
     hf = out / ".recipe-hash"
     old = json.loads(hf.read_text()) if hf.exists() else {}
     changed = [s for s in STAGES if s in old and old[s] != keys[s]]
@@ -430,7 +436,7 @@ def check_hashes(out, keys, sources, recipe_path, *, sharded, prepare):
     if changed:
         removed = 0
         for src in sources:
-            names = output_names(src, out)      # read before plans go
+            names = output_names(src, encdir)   # read before plans go
             for stage in changed:
                 for name in names:
                     for pat in STAGE_OUTPUTS[stage]:
@@ -443,8 +449,8 @@ def check_hashes(out, keys, sources, recipe_path, *, sharded, prepare):
                           out / f"{src.stem}.notes.sheet.png"):
                     if f.exists():
                         f.unlink()
-                if "encode" in changed and plan_path(out, src).exists():
-                    plan_path(out, src).unlink()   # tiling may have changed
+                if "encode" in changed and plan_path(encdir, src).exists():
+                    plan_path(encdir, src).unlink()   # tiling may have changed
         say(f"settings changed for: {', '.join(changed)} — "
             f"removed {removed} stale file(s)")
 
@@ -453,18 +459,19 @@ def check_hashes(out, keys, sources, recipe_path, *, sharded, prepare):
 
     if changed or prepare or not hf.exists():
         _atomic_json(hf, keys)
-        shutil.copyfile(recipe_path, out / "recipe.toml")   # ships with the piece
+        if copy_recipe:
+            shutil.copyfile(recipe_path, out / "recipe.toml")  # ships with the piece
 
 
 # ---------------------------------------------------------------------------
 # Rendering one job (an image, or one tile of a recording)
 # ---------------------------------------------------------------------------
-def place(tmp, out, name, stage):
+def place(tmp, dest, name, stage):
     """Move a stage's outputs into place, completion marker last."""
     for pat in STAGE_OUTPUTS[stage]:
         fn = pat.format(n=name)
         if (tmp / fn).exists():
-            os.replace(tmp / fn, out / fn)
+            os.replace(tmp / fn, dest / fn)
 
 
 def parse_verify(text):
@@ -505,8 +512,16 @@ def apply_palette(path, palette):
 
 
 def render_one(job, ctx):
+    """Render one job: an image, or one tile of a recording.
+
+    Encoded audio lives in ctx["enc"], everything downstream in ctx["var"].
+    For an ordinary render both are the same folder; in a sweep, variants
+    that share encode settings share one encode folder, so a photo is
+    encoded once per lens rather than once per combination.
+    """
     src, name = job["src"], job["name"]
-    out, r, on = ctx["out"], ctx["recipe"], ctx["on"]
+    r, on = job.get("recipe", ctx["recipe"]), job.get("on", ctx["on"])
+    encdir, out = job.get("enc", ctx["enc"]), job.get("var", ctx["var"])
     enc = r.get("encode", {})
     dec = r.get("decode", {})
     palette = dec.get("palette")
@@ -519,17 +534,18 @@ def render_one(job, ctx):
                "f_lo": lo if a["f_lo"] == "auto" else a["f_lo"],
                "f_hi": hi if a["f_hi"] == "auto" else a["f_hi"]}
     tmp = out / ".tmp" / f"{ctx['tag']}-{name}"
+    tmp = tmp.with_name(tmp.name)
     tmp.mkdir(parents=True, exist_ok=True)
     status = []
     try:
         # --- encode (image) or convert (audio) ---------------------------
-        wav = out / f"{name}.wav"
+        wav = encdir / f"{name}.wav"
         if wav.exists():
             status.append("encode·" if src.kind == "image" else "convert·")
         elif src.kind == "image":
             run([PY, IMGAUDIO, *flags(enc, SECTIONS["encode"]),
                  "encode", src.path, str(tmp / f"{name}.wav")])
-            place(tmp, out, name, "encode")
+            place(tmp, encdir, name, "encode")
             status.append("encode✓")
         else:
             cmd = ["ffmpeg", "-nostdin", "-y", "-loglevel", "error"]
@@ -539,7 +555,7 @@ def render_one(job, ctx):
             cmd += ["-i", src.path, "-ac", "1", "-ar", str(geo["sr"]),
                     "-c:a", "pcm_s16le", str(tmp / f"{name}.wav")]
             run(cmd)
-            place(tmp, out, name, "encode")
+            place(tmp, encdir, name, "encode")
             status.append("convert✓")
 
         # --- decode: photo round-trip, or the sound's own spectrogram ------
@@ -614,7 +630,7 @@ def render_one(job, ctx):
                 stage = tmp / "nd"          # staged as NAME.wav so the
                 stage.mkdir(exist_ok=True)  # chroma sidecar name lines up
                 wavfile.write(stage / f"{name}.wav", sr_n, x)
-                chroma = out / f"{name}.chroma.png"
+                chroma = encdir / f"{name}.chroma.png"
                 cmd = [PY, IMGAUDIO, *flags({**geo, "sr": sr_n}, GEOMETRY)]
                 if use_color and chroma.exists():
                     shutil.copyfile(chroma, stage / f"{name}.chroma.png")
@@ -635,15 +651,16 @@ def render_one(job, ctx):
 # ---------------------------------------------------------------------------
 # Sheets, report, and assembly
 # ---------------------------------------------------------------------------
-def build_sheets(out, sources, columns):
+def build_sheets(out, sources, columns, encdir=None):
     """Lay a long recording's tiles out in reading order, one image per
     recording. Rebuilt each run; removed if any tile is missing."""
     columns = max(1, int(columns))
+    encdir = encdir or out
     built = 0
     for src in sources:
         if src.kind != "audio":
             continue
-        names = output_names(src, out)
+        names = output_names(src, encdir)
         if len(names) < 2:
             continue
         for suffix, sheet_name in ((".png", ".sheet.png"),
@@ -703,12 +720,13 @@ def write_report(out, names):
         say(f"  {len(rows) - len(scored)} had no notes to transcribe")
 
 
-def assemble(out, names, cfg, tag):
+def assemble(out, names, cfg, tag, encdir=None):
     kind = cfg.get("from", "notes")
     if kind not in ("notes", "source"):
         sys.exit('recipe: [assemble] from must be "notes" or "source"')
+    src_dir = out if kind == "notes" else (encdir or out)
     suffix = ".notes.wav" if kind == "notes" else ".wav"
-    files = [out / f"{n}{suffix}" for n in names]
+    files = [src_dir / f"{n}{suffix}" for n in names]
     missing = [f for f in files if not f.exists()]
     if missing:
         say(f"assemble: {len(missing)} of {len(files)} inputs missing — skipped")
@@ -723,7 +741,7 @@ def assemble(out, names, cfg, tag):
     target = out / cfg.get("output", "assembled.wav")
     # ffmpeg resolves list entries relative to the list file, so the list
     # lives beside the inputs and holds bare names.
-    lst = out / ".assemble-list.txt"
+    lst = src_dir / ".assemble-list.txt"
     lst.write_text("".join(
         "file '{}'\n".format(f.name.replace("'", "'\\''")) for f in files))
     tmp = out / ".tmp" / f"assemble-{tag}{target.suffix}"
@@ -738,9 +756,222 @@ def assemble(out, names, cfg, tag):
 
 
 # ---------------------------------------------------------------------------
+# Sweeps — many configurations over the same sources
+# ---------------------------------------------------------------------------
+SWEEPABLE = ("encode", "decode", "notate", "notes_decode", "audio")
+
+
+def known_scales():
+    """Scale names notate.py accepts, per base. Asked of the tool itself, so
+    adding a scale there needs no change here."""
+    try:
+        text = run([PY, NOTATE, "scales"])
+    except ToolError:
+        return None
+    tables, base = {}, None
+    for line in text.splitlines():
+        m = re.match(r"base (\d+)", line)
+        if m:
+            base = int(m.group(1))
+            tables[base] = set()
+        elif base and line.startswith("  ") and line.strip():
+            tables[base].add(line.split()[0])
+    # notate swaps the base-10 default for a base-60 one, so it's valid in both
+    if 60 in tables:
+        tables[60].add("minor_pent")
+    return tables or None
+
+
+def scale_ok(cfg, tables):
+    """Is this [notate] section's scale valid for its base?"""
+    if not tables or "scale" not in cfg:
+        return True
+    return cfg["scale"] in tables.get(cfg.get("base", 10), set())
+
+
+def _fmt(v):
+    return json.dumps(v, separators=(",", ":")) if isinstance(v, dict) else str(v)
+
+
+def expand_variants(r):
+    """Turn a [sweep] section into one recipe per combination.
+
+    Variants that share encode settings also share an encode folder, so a
+    photo is encoded once per lens rather than once per combination.
+    """
+    axes = []
+    for sec, keys in sorted(r.get("sweep", {}).items()):
+        if sec not in SWEEPABLE:
+            sys.exit(f"recipe: [sweep.{sec}] can't be swept. "
+                     f"try: {', '.join(SWEEPABLE)}")
+        if not isinstance(keys, dict):
+            sys.exit(f"recipe: [sweep.{sec}] must be a table of key = [values]")
+        for k, vals in sorted(keys.items()):
+            if k not in SECTIONS[sec]:
+                sys.exit(f"recipe: unknown key in [sweep.{sec}]: {k}")
+            if not isinstance(vals, list) or not vals:
+                sys.exit(f"recipe: [sweep.{sec}] {k} must be a non-empty list")
+            axes.append((sec, k, vals))
+    if not axes:
+        sys.exit("recipe: [sweep] is empty")
+
+    tables = known_scales()
+    variants, skipped = [], []
+    for i, combo in enumerate(itertools.product(*[a[2] for a in axes]), 1):
+        rv = copy.deepcopy(r)
+        rv.pop("sweep", None)
+        rv.pop("assemble", None)          # assembling every variant is rarely wanted
+        params = {}
+        for (sec, key, _), val in zip(axes, combo):
+            rv.setdefault(sec, {})[key] = val
+            params[f"{sec}.{key}"] = val
+        if not scale_ok(rv.get("notate", {}), tables):
+            nt = rv["notate"]
+            skipped.append(f"base {nt.get('base', 10)} + scale {nt['scale']}")
+            continue
+        variants.append({
+            "id": f"v{i:03d}",
+            "params": params,
+            "label": "  ".join(f"{k.split('.')[-1]}={_fmt(v)}"
+                               for k, v in params.items()),
+            "recipe": rv,
+        })
+    if skipped:
+        say(f"sweep: skipped {len(skipped)} impossible combination(s) — "
+            f"{', '.join(sorted(set(skipped))[:4])}"
+            + (" ..." if len(set(skipped)) > 4 else ""))
+    if not variants:
+        sys.exit("sweep: every combination was invalid")
+    return variants
+
+
+def sweep_report(out, variants):
+    """Gather every variant's rows into sweep.csv and rank by fidelity."""
+    rows = []
+    for v in variants:
+        rc = out / v["id"] / "report.csv"
+        if not rc.exists():
+            continue
+        with open(rc, newline="") as fp:
+            for row in csv.DictReader(fp):
+                rows.append({"variant": v["id"], "label": v["label"], **row})
+    if not rows:
+        say("\nno scores to rank — the sweep produced pictures only "
+            "(add [notate] to score transcriptions)")
+        return
+    cols = ["variant", "label", "name", "source", "fidelity",
+            "distinct_pitches", "notes", "note_density", "bits_per_note",
+            "mean_cents"]
+    tmp = out / "sweep.csv.tmp"
+    with open(tmp, "w", newline="") as fp:
+        w = csv.DictWriter(fp, fieldnames=cols, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+    os.replace(tmp, out / "sweep.csv")
+
+    ranked = []
+    for v in variants:
+        f = [float(x["fidelity"]) for x in rows
+             if x["variant"] == v["id"] and x.get("fidelity")]
+        if f:
+            ranked.append((float(np.mean(f)), float(np.std(f)), len(f), v))
+    ranked.sort(key=lambda x: -x[0])
+    say(f"\nsweep.csv: {len(rows)} rows, {len(ranked)} variants scored")
+    say(f"  ranked by mean fidelity across sources "
+        f"(n = sources scored per variant)")
+    for mean, sd, n, v in ranked[:12]:
+        say(f"  {mean:.3f} ±{sd:.3f}  n={n:<3d} {v['id']}  {v['label']}")
+    if len(ranked) > 12:
+        say(f"  ... {len(ranked) - 12} more in sweep.csv")
+    if ranked:
+        spread = ranked[0][0] - ranked[-1][0]
+        say(f"  best - worst = {spread:.3f}; "
+            f"per-source spread within the best variant is ±{ranked[0][1]:.3f}"
+            + ("  — the difference may be noise" if spread < 2 * ranked[0][1]
+               else ""))
+
+
+# ---------------------------------------------------------------------------
+# One configuration over the sources
+# ---------------------------------------------------------------------------
+def execute(r, args, out, encdir, sources, mine, recipe_path, *,
+            copy_recipe=True, do_assemble=True, label=None):
+    """Render one configuration. Returns (jobs, failures)."""
+    on = enabled(r)
+    a = audio_cfg(r)
+    keys = stage_keys(r)
+    tag = f"{socket.gethostname()}-{os.getpid()}"
+    out.mkdir(parents=True, exist_ok=True)
+    encdir.mkdir(parents=True, exist_ok=True)
+    if label:
+        say(f"\n=== {label}")
+
+    check_hashes(out, keys, sources, recipe_path, sharded=bool(args.shard),
+                 prepare=args.prepare, encdir=encdir, copy_recipe=copy_recipe)
+
+    # Analyze recordings (duration, tiles, band). --prepare does all of them
+    # so fleet workers don't each re-analyze; otherwise just this slice.
+    to_plan = [s for s in (sources if args.prepare else mine)
+               if s.kind == "audio"]
+    plans, key = {}, _h(_conv_part(r))
+    for s in list(to_plan):              # reuse cached analysis silently
+        pf = plan_path(encdir, s)
+        if pf.exists():
+            p = json.loads(pf.read_text())
+            if p.get("key") == key:
+                plans[s.stem] = p
+                to_plan.remove(s)
+    if to_plan:
+        say(f"analyzing {len(to_plan)} recording(s)...")
+        with cf.ThreadPoolExecutor(max_workers=args.jobs) as pool:
+            futs = {pool.submit(plan_audio, s, encdir, r): s for s in to_plan}
+            for fut in cf.as_completed(futs):
+                s = futs[fut]
+                try:
+                    p = fut.result()
+                    plans[s.stem] = p
+                    say(f"  {s.stem}: {p['duration']:.1f}s, "
+                        f"{len(p['tiles'])} tile(s), band "
+                        f"{p['band'][0]:.0f}-{p['band'][1]:.0f} Hz")
+                except ToolError as e:
+                    say(f"  {s.stem}: FAILED\n  " + str(e).replace("\n", "\n  "))
+    if args.prepare:
+        return 0, 0
+
+    runnable = [s for s in mine if s.kind == "image" or s.stem in plans]
+    jobs = make_jobs(runnable, encdir, r, plans)
+    say(f"jobs:    {len(jobs)} on {args.jobs} worker(s)\n")
+    ctx = {"enc": encdir, "var": out, "recipe": r, "on": on, "tag": tag}
+    plan_failures = len([s for s in mine
+                         if s.kind == "audio" and s.stem not in plans])
+    failures = 0
+    with cf.ThreadPoolExecutor(max_workers=args.jobs) as pool:
+        futures = [pool.submit(render_one, j, ctx) for j in jobs]
+        for k, fut in enumerate(cf.as_completed(futures), 1):
+            name, status, err = fut.result()
+            say(f"[{k}/{len(jobs)}] {name}  {'  '.join(status)}")
+            if err:
+                failures += 1
+                say("  FAILED\n  " + err.replace("\n", "\n  "))
+
+    all_names = [n for s in sources for n in output_names(s, encdir)]
+    if on["decode"]:
+        build_sheets(out, sources, a["sheet_columns"], encdir=encdir)
+    if on["notate"] and r.get("notate", {}).get("verify", True):
+        write_report(out, all_names)
+    if do_assemble and on["assemble"]:
+        if args.shard:
+            say("\nsharded run — assemble skipped; run once without --shard "
+                "when all workers finish")
+        else:
+            assemble(out, all_names, r["assemble"], tag, encdir=encdir)
+    return len(jobs), failures + plan_failures
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-def make_jobs(sources, out, r, plans):
+def make_jobs(sources, encdir, r, plans):
     jobs = []
     for src in sources:
         if src.kind == "image":
@@ -773,19 +1004,21 @@ def main():
     args = ap.parse_args()
 
     r = load_recipe(args.recipe)
-    on = enabled(r)
     enc = r.get("encode", {})
     if enc.get("color") and enc.get("lens") in ("spectral", "phyllotaxis"):
         say(f"note: lens '{enc['lens']}' rearranges the image, so the photo's "
             f"colour won't line up with the decode — it will tint rather than "
             f"recover. Colour matches raw, edges, and fractal.\n")
+    if "sweep" not in r and not scale_ok(r.get("notate", {}), known_scales()):
+        nt = r["notate"]
+        sys.exit(f"recipe: scale '{nt['scale']}' doesn't exist for base "
+                 f"{nt.get('base', 10)} — run `python3 notate.py scales`")
     sources = find_sources(r)
     out = Path(r.get("output", {}).get("dir",
                f"renders/{Path(args.recipe).stem}"))
     out.mkdir(parents=True, exist_ok=True)
-    keys = stage_keys(r)
-    tag = f"{socket.gethostname()}-{os.getpid()}"
     a = audio_cfg(r)
+    on = enabled(r)
 
     mine = sources
     if args.shard:
@@ -800,22 +1033,23 @@ def main():
         mine = sources[i - 1::n]
 
     n_img = sum(s.kind == "image" for s in sources)
-    n_aud = len(sources) - n_img
+    variants = expand_variants(r) if "sweep" in r else None
     stages = [s for s in STAGES + ["assemble"] if on[s]]
     if n_img == 0:
         stages = ["convert" if s == "encode" else s for s in stages]
+    if variants:
+        stages = [s for s in stages if s != "assemble"]
     say(f"recipe:  {args.recipe}")
     say(f"output:  {out}/")
-    say(f"sources: {n_img} image(s), {n_aud} recording(s)"
+    say(f"sources: {n_img} image(s), {len(sources) - n_img} recording(s)"
         + (f" — this shard {args.shard}: {len(mine)}" if args.shard else ""))
     say(f"stages:  {' → '.join(stages)}")
+    if variants:
+        encs = {stage_keys(v["recipe"])["encode"] for v in variants}
+        say(f"sweep:   {len(variants)} variants over "
+            f"{len(r['sweep'])} section(s), {len(encs)} distinct encode(s)")
 
     if args.dry_run:
-        hf = out / ".recipe-hash"
-        old = json.loads(hf.read_text()) if hf.exists() else {}
-        changed = [s for s in STAGES if s in old and old[s] != keys[s]]
-        if changed:
-            say(f"would invalidate: {', '.join(changed)}")
         names = []
         for src in mine:
             if src.kind == "image":
@@ -828,6 +1062,19 @@ def main():
                 say(f"  {src.path}: {d:.1f}s -> {len(got)} tile(s)" if d
                     else f"  {src.path}: duration unknown")
             names += got
+        if variants:
+            say(f"  {len(names)} source(s)/tile(s) × {len(variants)} variants "
+                f"= {len(names) * len(variants)} jobs")
+            for v in variants[:6]:
+                say(f"    {v['id']}  {v['label']}")
+            if len(variants) > 6:
+                say(f"    ... {len(variants) - 6} more")
+            return
+        hf = out / ".recipe-hash"
+        old = json.loads(hf.read_text()) if hf.exists() else {}
+        changed = [s for s in STAGES if s in old and old[s] != stage_keys(r)[s]]
+        if changed:
+            say(f"would invalidate: {', '.join(changed)}")
         for stage in STAGES:
             if not on[stage]:
                 continue
@@ -838,75 +1085,37 @@ def main():
             say(f"  {label:13s} {done:5d} done, {len(names) - done:5d} to render")
         return
 
-    check_hashes(out, keys, sources, args.recipe,
-                 sharded=bool(args.shard), prepare=args.prepare)
-
-    # Analyze recordings (duration, tiles, band). --prepare does all of them
-    # so fleet workers don't each re-analyze; otherwise just this slice.
-    to_plan = [s for s in (sources if args.prepare else mine)
-               if s.kind == "audio"]
-    plans = {}
-    key = _h(_conv_part(r))
-    for s in list(to_plan):              # reuse cached analysis silently
-        pf = plan_path(out, s)
-        if pf.exists():
-            p = json.loads(pf.read_text())
-            if p.get("key") == key:
-                plans[s.stem] = p
-                to_plan.remove(s)
-    if to_plan:
-        say(f"analyzing {len(to_plan)} recording(s)...")
-        with cf.ThreadPoolExecutor(max_workers=args.jobs) as pool:
-            futs = {pool.submit(plan_audio, s, out, r): s for s in to_plan}
-            for fut in cf.as_completed(futs):
-                s = futs[fut]
-                try:
-                    p = fut.result()
-                    plans[s.stem] = p
-                    say(f"  {s.stem}: {p['duration']:.1f}s, "
-                        f"{len(p['tiles'])} tile(s), band "
-                        f"{p['band'][0]:.0f}-{p['band'][1]:.0f} Hz")
-                except ToolError as e:
-                    say(f"  {s.stem}: FAILED\n  " + str(e).replace("\n", "\n  "))
-    if args.prepare:
-        say("prepared — launch the shards")
-        return
-
-    runnable = [s for s in mine if s.kind == "image" or s.stem in plans]
-    jobs = make_jobs(runnable, out, r, plans)
-    say(f"jobs:    {len(jobs)} on {args.jobs} worker(s)\n")
-    ctx = {"out": out, "recipe": r, "on": on, "tag": tag}
-    plan_failures = len([s for s in mine if s.kind == "audio" and s.stem not in plans])
-    failures = 0
+    total = failed = 0
     try:
-        with cf.ThreadPoolExecutor(max_workers=args.jobs) as pool:
-            futures = [pool.submit(render_one, j, ctx) for j in jobs]
-            for k, fut in enumerate(cf.as_completed(futures), 1):
-                name, status, err = fut.result()
-                say(f"[{k}/{len(jobs)}] {name}  {'  '.join(status)}")
-                if err:
-                    failures += 1
-                    say("  FAILED\n  " + err.replace("\n", "\n  "))
+        if variants:
+            _atomic_json(out / "variants.json",
+                         [{k: v[k] for k in ("id", "params", "label")}
+                          for v in variants])
+            shutil.copyfile(args.recipe, out / "recipe.toml")
+            for v in variants:
+                vkeys = stage_keys(v["recipe"])
+                encdir = out / f"enc-{vkeys['encode']}"
+                j, f = execute(v["recipe"], args, out / v["id"], encdir,
+                               sources, mine, args.recipe, copy_recipe=False,
+                               do_assemble=False,
+                               label=f"{v['id']}  {v['label']}")
+                total += j
+                failed += f
+            if not args.prepare:
+                sweep_report(out, variants)
+        else:
+            total, failed = execute(r, args, out, out, sources, mine,
+                                    args.recipe)
     except KeyboardInterrupt:
         say("\ninterrupted — rerun the same command to resume")
         sys.exit(130)
 
-    all_names = [n for s in sources for n in output_names(s, out)]
-    if on["decode"]:
-        build_sheets(out, sources, a["sheet_columns"])
-    if on["notate"] and r.get("notate", {}).get("verify", True):
-        write_report(out, all_names)
-
-    if on["assemble"]:
-        if args.shard:
-            say("\nsharded run — assemble skipped; run once without --shard "
-                "when all workers finish")
-        else:
-            assemble(out, all_names, r["assemble"], tag)
-
-    say(f"\ndone — {len(jobs) - failures} ok, {failures + plan_failures} failed  "
+    if args.prepare:
+        say("prepared — launch the shards")
+        return
+    say(f"\ndone — {total - failed} ok, {failed} failed  "
         f"(✓ rendered · skipped ∅ no notes)")
-    if failures or plan_failures:
+    if failed:
         sys.exit(1)
 
 

@@ -151,6 +151,61 @@ palette = "magma"
 `recipes/recordings.toml` is a commented starting point. Images and recordings
 can be mixed in one recipe.
 
+### Sweeps — trying many settings at once
+
+`render.py` normally applies one configuration to many sources. A `[sweep]`
+section does the transpose: every combination of the listed values, over the
+same sources, ranked by how much of each source survived transcription.
+
+```toml
+[sweep.encode]
+lens = ["raw", "spectral"]
+
+[sweep.notate]
+base   = [10, 60]
+scale  = ["minor_pent", "harmonic"]
+voices = [3, 7]
+```
+
+```bash
+python3 render.py recipes/sweep.toml --dry-run   # count combinations first
+python3 render.py recipes/sweep.toml
+```
+
+Each combination gets its own folder (`v001`, `v002`, ...) alongside
+`variants.json` recording what each one was, and `sweep.csv` with every row
+from every variant. At the end it prints a ranking:
+
+```
+sweep.csv: 36 rows, 12 variants scored
+  ranked by mean fidelity across sources (n = sources scored per variant)
+  0.591 ±0.024  n=3   v008  lens=raw  base=60  scale=harmonic  voices=7
+  0.579 ±0.015  n=3   v007  lens=raw  base=60  scale=harmonic  voices=3
+  ...
+  best - worst = 0.108; per-source spread within the best variant is ±0.024
+```
+
+That last line is the guard against reading too much into a sweep: if the gap
+between best and worst is smaller than the variation between sources within
+one variant, it says so, and the ranking is noise.
+
+- **Combinations multiply.** Four axes of two values each is sixteen
+  variants; on twelve images that's 192 renders. `--dry-run` counts them, and
+  prints the first few, before you commit.
+- **Encodes are shared.** Variants with identical encode settings share one
+  encode folder, so a photo is encoded once per lens rather than once per
+  combination.
+- **Impossible combinations are skipped** with a note — a base-60 scale name
+  paired with base 10, for instance. Scale names are read from `notate.py`
+  itself, so adding one there needs no change here.
+- **Sweeps don't assemble.** One joined file per variant is rarely what you
+  want; `[assemble]` is ignored.
+- **Unscored axes still work.** Sweeping only `lens` or `palette` with no
+  `[notate]` section produces a gallery of variant folders and says there was
+  nothing to rank.
+
+`recipes/sweep.toml` is a commented starting point.
+
 ### Across a fleet
 
 With the output folder on shared storage:

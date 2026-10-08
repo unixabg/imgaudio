@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>imgaudio</title>
+<meta name="description" content="Turn a photo into sound, read the picture back out of it, and turn the sound into music. Runs entirely on your device.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one narrow column, phone first. A spectrogram colour bar is the signature; everything else stays quiet. */
+:root {
+  --bg: #eef2f1;
+  --surface: #ffffff;
+  --fg: #13201e;
+  --muted: #55625f;
+  --line: #d3dcda;
+  --accent: #1f7f7a;
+  --accent-ink: #ffffff;
+  --warn: #9a3b12;
+  --ramp: linear-gradient(90deg, #440154, #3b528b, #21918c, #5ec962, #fde725);
+  --display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --body: "Atkinson Hyperlegible", system-ui, -apple-system, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1615; --surface: #16211f; --fg: #e3ece9; --muted: #95a6a2;
+    --line: #2a3a37; --accent: #4cc38a; --accent-ink: #08130f; --warn: #f0a070;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 17px/1.5 var(--body);
+  padding: env(safe-area-inset-top, 0px) 16px calc(32px + env(safe-area-inset-bottom, 0px));
+}
+main { max-width: 34rem; margin: 0 auto; display: grid; gap: 20px; }
+img { max-width: 100%; display: block; }
+
+header { padding-block: 28px 4px; display: grid; gap: 10px; }
+h1 { font: 700 2.6rem/1 var(--display); letter-spacing: -0.02em; margin: 0; }
+.lede { margin: 0; color: var(--muted); max-width: 30rem; text-wrap: pretty; }
+.bar { height: 10px; border-radius: 2px; background: var(--ramp); }
+.ticks { display: flex; justify-content: space-between; font: 12px/1 var(--mono); color: var(--muted); margin-top: 6px; }
+
+.status {
+  display: flex; gap: 10px; align-items: center; font-size: 14px; color: var(--muted);
+  min-height: 22px;
+}
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; animation: pulse 1.2s ease-in-out infinite; }
+.status.ready .dot { animation: none; }
+.status.bad { color: var(--warn); }
+.status.bad .dot { background: var(--warn); animation: none; }
+@keyframes pulse { 50% { opacity: .25; } }
+
+section { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px; display: grid; gap: 14px; min-width: 0; }
+h2 { font: 700 1.15rem/1.2 var(--display); margin: 0; display: flex; gap: 10px; align-items: baseline; }
+h2 .n { font: 600 13px/1 var(--mono); color: var(--accent); }
+p { margin: 0; }
+.hint { font-size: 14px; color: var(--muted); }
+
+.pick { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+button, .btn {
+  font: 700 16px/1 var(--body); border-radius: 8px; padding: 14px 16px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--bg); color: var(--fg);
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px; text-decoration: none;
+  min-height: 48px;
+}
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); width: 100%; font-size: 18px; }
+button:disabled { opacity: .5; cursor: default; }
+button:focus-visible, .btn:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+.preview { border-radius: 6px; overflow: hidden; background: var(--bg); aspect-ratio: 3 / 2; display: grid; place-items: center; color: var(--muted); font-size: 14px; }
+.preview img { width: 100%; height: 100%; object-fit: cover; }
+
+.fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.field { display: grid; gap: 4px; min-width: 0; }
+.field.wide { grid-column: 1 / -1; }
+label, .label { font-size: 13px; font-weight: 700; color: var(--muted); letter-spacing: .02em; }
+select, input[type=number] {
+  font: 16px var(--body); color: var(--fg); background: var(--bg); width: 100%;
+  border: 1px solid var(--line); border-radius: 6px; padding: 10px; min-height: 44px;
+}
+.check { display: flex; gap: 10px; align-items: center; font-size: 15px; color: var(--fg); font-weight: 400; letter-spacing: 0; }
+.check input { width: 20px; height: 20px; accent-color: var(--accent); }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+.desc { font-size: 13px; color: var(--muted); }
+details summary { cursor: pointer; font-weight: 700; font-size: 15px; padding-block: 4px; }
+details[open] summary { margin-bottom: 12px; }
+
+.out { display: grid; gap: 10px; }
+.out + .out { border-top: 1px solid var(--line); padding-top: 14px; }
+audio { width: 100%; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; }
+.row .btn { flex: 1 1 8rem; font-size: 15px; min-height: 44px; padding: 10px 12px; }
+.picture { border-radius: 6px; image-rendering: auto; width: 100%; background: #000; }
+pre { font: 12.5px/1.5 var(--mono); background: var(--bg); border-radius: 6px; padding: 12px; margin: 0; overflow-x: auto; white-space: pre; font-variant-numeric: tabular-nums; }
+.score { font: 600 28px/1 var(--mono); font-variant-numeric: tabular-nums; }
+
+footer { font-size: 14px; color: var(--muted); display: grid; gap: 8px; padding-top: 4px; }
+footer a { color: var(--accent); }
+@media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
+@media (max-width: 380px) { .fields { grid-template-columns: 1fr; } h1 { font-size: 2.2rem; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>imgaudio</h1>
+    <p class="lede">Turn a photo into sound, read the picture back out of it, then turn the sound into music.</p>
+    <div>
+      <div class="bar" aria-hidden="true"></div>
+      <div class="ticks" aria-hidden="true"><span>80 Hz</span><span>800 Hz</span><span>8 kHz</span></div>
+    </div>
+    <div class="status" id="status" role="status"><span class="dot"></span><span id="status-text">Starting Python. The first visit downloads about 30 MB; later visits load from cache.</span></div>
+  </header>
+
+  <section aria-labelledby="h-photo">
+    <h2 id="h-photo"><span class="n">01</span>Choose a photo</h2>
+    <div class="preview" id="preview">No photo yet</div>
+    <div class="pick">
+      <label class="btn" for="file">Choose photo</label>
+      <button type="button" id="sample">Use a sample</button>
+    </div>
+    <input type="file" id="file" accept="image/*">
+    <p class="hint" id="photo-note">The photo stays on your device. Large photos are shrunk before processing, since the sound only uses a few hundred points across.</p>
+  </section>
+
+  <section aria-labelledby="h-settings">
+    <h2 id="h-settings"><span class="n">02</span>Pick how it sounds</h2>
+    <div class="fields">
+      <div class="field wide">
+        <label for="lens">Lens</label>
+        <select id="lens"><option value="raw">raw</option></select>
+        <span class="desc" id="lens-desc">plain brightness, the honest spectrogram</span>
+      </div>
+      <div class="field">
+        <label for="base">Tuning</label>
+        <select id="base">
+          <option value="10">Equal (base 10)</option>
+          <option value="60">Just (base 60)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="scale">Scale</label>
+        <select id="scale"><option value="minor_pent">minor_pent</option></select>
+      </div>
+      <div class="field">
+        <label for="detail">Detail</label>
+        <select id="detail">
+          <option value="150x300">Quick (older phones)</option>
+          <option value="200x400" selected>Standard</option>
+          <option value="300x600">Fine (slower)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="program">MIDI instrument</label>
+        <select id="program">
+          <option value="11">Vibraphone</option>
+          <option value="0">Piano</option>
+          <option value="46">Harp</option>
+          <option value="89">Pad</option>
+        </select>
+      </div>
+    </div>
+    <details>
+      <summary>More settings</summary>
+      <div class="fields">
+        <div class="field">
+          <label for="bpm">Tempo (BPM)</label>
+          <input type="number" id="bpm" value="100" min="30" max="240" inputmode="numeric">
+        </div>
+        <div class="field">
+          <label for="voices">Voices</label>
+          <input type="number" id="voices" value="3" min="1" max="17" inputmode="numeric">
+        </div>
+        <div class="field">
+          <label for="grid">Rhythm grid</label>
+          <select id="grid">
+            <option value="4">Quarter notes</option>
+            <option value="8" selected>Eighth notes</option>
+            <option value="16">Sixteenth notes</option>
+            <option value="12">Triplets (12)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="root">Root note</label>
+          <select id="root">
+            <option>A1</option><option selected>A2</option><option>C3</option><option>D3</option><option>E2</option><option>G2</option>
+          </select>
+        </div>
+        <div class="field wide">
+          <label for="dry">Picture under the music: <span id="dry-val">0%</span></label>
+          <input type="range" id="dry" min="0" max="0.6" step="0.1" value="0">
+          <span class="desc">Mixes the photo's sound back beneath the notes, so the picture partly survives in the music.</span>
+        </div>
+        <div class="field wide">
+          <label class="check"><input type="checkbox" id="color" checked> Bring the colour back</label>
+          <span class="desc">Sound carries brightness only. This keeps a tiny colour map beside it so the recovered picture is in colour.</span>
+        </div>
+      </div>
+    </details>
+    <button type="button" class="primary" id="make" disabled>Make sound</button>
+  </section>
+
+  <section aria-labelledby="h-results" id="results" hidden>
+    <h2 id="h-results"><span class="n">03</span>Listen <span class="desc" id="took"></span></h2>
+    <div class="out">
+      <span class="label">The photo as sound</span>
+      <audio id="a-sound" controls preload="auto"></audio>
+      <div class="row"><a class="btn" id="d-sound" download="imgaudio-sound.wav">Save WAV</a></div>
+    </div>
+    <div class="out">
+      <span class="label">The picture, read back out of that sound</span>
+      <img class="picture" id="picture" alt="Image decoded from the generated audio">
+    </div>
+    <div class="out">
+      <span class="label">The sound as music</span>
+      <audio id="a-melody" controls preload="auto"></audio>
+      <div class="row">
+        <a class="btn" id="d-melody" download="imgaudio-melody.wav">Save WAV</a>
+        <a class="btn" id="d-midi" download="imgaudio-melody.mid">Save MIDI</a>
+      </div>
+      <p class="hint">Open the MIDI file in GarageBand, a DAW, or any MIDI player.</p>
+    </div>
+    <div class="out">
+      <span class="label">How much of the photo survived in the music</span>
+      <span class="score" id="fidelity">–</span>
+      <p class="hint">Spectral fidelity: 1.0 is identical, 0.04 is noise.</p>
+      <details>
+        <summary>Full report</summary>
+        <pre id="log"></pre>
+      </details>
+    </div>
+  </section>
+
+  <footer>
+    <p>Everything runs in your browser with Python (Pyodide). Nothing is uploaded.</p>
+    <p>For timelapse batches, recurrence plots and the full set of flags, use the command-line tools: <a href="https://github.com/unixabg/imgaudio">github.com/unixabg/imgaudio</a></p>
+  </footer>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const MAX_SIDE = 1024;
+let photo = null;       // ArrayBuffer of a downscaled JPEG
+let ready = false, busy = false, catalog = null, started = 0;
+const urls = [];
+
+function status(text, kind = "") {
+  $("status-text").textContent = text;
+  $("status").className = "status " + kind;
+}
+function refresh() {
+  $("make").disabled = !(ready && photo && !busy);
+  $("make").textContent = busy ? "Working…" : (ready ? "Make sound" : "Waiting for Python…");
+}
+
+// --- worker ---------------------------------------------------------------
+const worker = new Worker("worker.js");
+worker.onmessage = ({ data }) => {
+  if (data.type === "stage") status(data.text + "…");
+  else if (data.type === "ready") {
+    ready = true; catalog = data.catalog; fillCatalog();
+    status(photo ? "Ready." : "Ready. Choose a photo or use the sample.", "ready");
+    refresh();
+  } else if (data.type === "error") {
+    busy = false; refresh();
+    status(data.fatal ? data.text + " Check your connection and reload."
+                      : "That didn't work: " + data.text.split("\n").slice(-2).join(" "), "bad");
+    $("log").textContent = data.text;
+  } else if (data.type === "done") {
+    busy = false; refresh(); show(data);
+  }
+};
+
+function fillCatalog() {
+  $("lens").innerHTML = "";
+  for (const l of catalog.lenses) $("lens").add(new Option(l.name, l.name));
+  fillScales(); lensDesc();
+}
+function fillScales() {
+  if (!catalog) return;
+  const base = $("base").value, want = base === "60" ? "babylonian_pent" : "minor_pent";
+  $("scale").innerHTML = "";
+  for (const s of catalog.scales[base]) $("scale").add(new Option(s, s, s === want, s === want));
+}
+function lensDesc() {
+  const l = catalog && catalog.lenses.find((x) => x.name === $("lens").value);
+  $("lens-desc").textContent = l ? l.desc : "";
+}
+$("base").onchange = fillScales;
+$("lens").onchange = lensDesc;
+$("dry").oninput = () => { $("dry-val").textContent = Math.round($("dry").value * 100) + "%"; };
+
+// --- photo: decode, apply rotation, shrink, re-encode as JPEG -------------
+async function shrink(blob) {
+  let bmp;
+  try { bmp = await createImageBitmap(blob, { imageOrientation: "from-image" }); }
+  catch {
+    // Fallback path (older Safari): let an <img> decode it.
+    bmp = await new Promise((ok, fail) => {
+      const img = new Image(); img.onload = () => ok(img); img.onerror = fail;
+      img.src = URL.createObjectURL(blob);
+    });
+  }
+  const w = bmp.width, h = bmp.height, k = Math.min(1, MAX_SIDE / Math.max(w, h));
+  const c = document.createElement("canvas");
+  c.width = Math.round(w * k); c.height = Math.round(h * k);
+  c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+  const jpg = await new Promise((ok) => c.toBlob(ok, "image/jpeg", 0.92));
+  return { jpg, w, h, cw: c.width, ch: c.height };
+}
+
+async function usePhoto(blob, label) {
+  try {
+    const s = await shrink(blob);
+    photo = await s.jpg.arrayBuffer();
+    const img = new Image(); img.alt = "Chosen photo"; img.src = URL.createObjectURL(s.jpg);
+    $("preview").replaceChildren(img);
+    $("photo-note").textContent = s.w > s.cw
+      ? `${label}: ${s.w}×${s.h}, shrunk to ${s.cw}×${s.ch} for processing.`
+      : `${label}: ${s.w}×${s.h}.`;
+    if (ready) status("Ready.", "ready");
+  } catch {
+    const heic = /hei[cf]/i.test(blob.type) || /\.hei[cf]$/i.test(blob.name || "");
+    status(heic
+      ? "This browser can't open HEIC photos. Pick it from Photos in Safari, or save it as JPEG first."
+      : "Couldn't open that file as an image. Try a JPEG or PNG.", "bad");
+  }
+  refresh();
+}
+$("file").onchange = (e) => { const f = e.target.files[0]; if (f) usePhoto(f, f.name || "Photo"); };
+
+// Sample photo: a small landscape drawn on a canvas, so there is no extra file to fetch.
+$("sample").onclick = () => {
+  const c = document.createElement("canvas"); c.width = 960; c.height = 640;
+  const g = c.getContext("2d");
+  const sky = g.createLinearGradient(0, 0, 0, 640);
+  sky.addColorStop(0, "#1b2a4a"); sky.addColorStop(.55, "#e98a4f"); sky.addColorStop(.7, "#f6cf7a");
+  g.fillStyle = sky; g.fillRect(0, 0, 960, 640);
+  g.fillStyle = "#fff4d6"; g.beginPath(); g.arc(640, 380, 70, 0, 7); g.fill();
+  const hill = (y, amp, col) => {
+    g.fillStyle = col; g.beginPath(); g.moveTo(0, 640);
+    for (let x = 0; x <= 960; x += 8) g.lineTo(x, y + Math.sin(x / 90) * amp + Math.sin(x / 23) * amp / 4);
+    g.lineTo(960, 640); g.fill();
+  };
+  hill(430, 28, "#4b3b5e"); hill(490, 20, "#2b2740");
+  g.fillStyle = "#15131f";
+  for (let x = 30; x < 960; x += 70 + (x % 37)) {
+    const h = 60 + (x * 7) % 90, b = 520 + (x % 29);
+    g.beginPath(); g.moveTo(x, b - h); g.lineTo(x - h / 4, b); g.lineTo(x + h / 4, b); g.fill();
+  }
+  hill(560, 10, "#0d0c14");
+  c.toBlob((b) => usePhoto(b, "Sample sunset"), "image/jpeg", 0.92);
+};
+
+// --- run ------------------------------------------------------------------
+$("make").onclick = () => {
+  if (!ready || !photo) return;
+  const [rows, cols] = $("detail").value.split("x").map(Number);
+  busy = true; refresh(); started = performance.now();
+  status("Making sound…");
+  worker.postMessage({ type: "make", photo: photo.slice(0), opts: {
+    rows, cols, lens: $("lens").value, color: $("color").checked,
+    base: Number($("base").value), scale: $("scale").value, root: $("root").value,
+    bpm: Number($("bpm").value) || 100, grid: Number($("grid").value),
+    voices: Math.max(1, Number($("voices").value) || 3),
+    program: Number($("program").value), dry_mix: Number($("dry").value),
+  }});
+};
+
+function blobUrl(bytes, type) {
+  const u = URL.createObjectURL(new Blob([bytes], { type })); urls.push(u); return u;
+}
+function show(d) {
+  while (urls.length) URL.revokeObjectURL(urls.pop());
+  const sound = blobUrl(d.sound, "audio/wav"), melody = blobUrl(d.melody, "audio/wav");
+  $("a-sound").src = sound; $("d-sound").href = sound;
+  $("a-melody").src = melody; $("d-melody").href = melody;
+  $("d-midi").href = blobUrl(d.midi, "audio/midi");
+  $("picture").src = blobUrl(d.picture, "image/png");
+  const fid = /spectral fidelity\s+([\d.]+)/.exec(d.log);
+  $("fidelity").textContent = fid ? fid[1] : "–";
+  $("log").textContent = d.log.trim().replace(/\/work\//g, "");
+  $("took").textContent = `made in ${((performance.now() - started) / 1000).toFixed(1)} s`;
+  $("results").hidden = false;
+  status("Done. Press play.", "ready");
+  $("results").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+}
+refresh();
+</script>
+</body>
+</html>

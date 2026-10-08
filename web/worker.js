@@ -46,7 +46,7 @@ function read(path) {
 onmessage = async ({ data }) => {
   if (data.type !== "make") return;
   try {
-    for (const f of ["sound.wav", "sound.chroma.png", "picture.png", "melody.wav", "melody.mid"]) {
+    for (const f of ["sound.wav", "sound.chroma.png", "picture.png", "melody.wav", "melody.mid", "melody.png"]) {
       try { py.FS.unlink("/work/" + f); } catch {}
     }
     py.FS.writeFile("/work/photo.jpg", new Uint8Array(data.photo));
@@ -57,6 +57,7 @@ onmessage = async ({ data }) => {
       picture: read("/work/picture.png"),
       melody: read("/work/melody.wav"),
       midi: read("/work/melody.mid"),
+      melodyPicture: read("/work/melody.png"),
     };
     postMessage({ type: "done", log, ...out },
       Object.values(out).filter(Boolean).map((a) => a.buffer));

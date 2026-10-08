@@ -230,6 +230,11 @@ footer a { color: var(--accent); }
       <p class="hint">Open the MIDI file in GarageBand, a DAW, or any MIDI player.</p>
     </div>
     <div class="out">
+      <span class="label">The picture, read back out of the music</span>
+      <img class="picture" id="melody-picture" alt="Image decoded from the music">
+      <p class="hint" id="melody-hint">The music is made of new notes, so this mostly shows the notes. Raise "Picture under the music" in More settings to bring the photo back. Shown in grey because colour would be painted on, not recovered.</p>
+    </div>
+    <div class="out">
       <span class="label">How much of the photo survived in the music</span>
       <span class="score" id="fidelity">–</span>
       <p class="hint">Spectral fidelity: 1.0 is identical, 0.04 is noise.</p>
@@ -386,6 +391,11 @@ function show(d) {
   $("a-melody").src = melody; $("d-melody").href = melody;
   $("d-midi").href = blobUrl(d.midi, "audio/midi");
   $("picture").src = blobUrl(d.picture, "image/png");
+  $("melody-picture").src = blobUrl(d.melodyPicture, "image/png");
+  const mix = Math.round(Number($("dry").value) * 100);
+  $("melody-hint").textContent = mix > 0
+    ? `${mix}% of the photo's sound is mixed under the notes, so the photo shows through them. Shown in grey because colour would be painted on, not recovered.`
+    : `The music is made of new notes, so this mostly shows the notes. Raise "Picture under the music" in More settings to bring the photo back. Shown in grey because colour would be painted on, not recovered.`;
   const fid = /spectral fidelity\s+([\d.]+)/.exec(d.log);
   $("fidelity").textContent = fid ? fid[1] : "–";
   $("log").textContent = d.log.trim().replace(/\/work\//g, "");

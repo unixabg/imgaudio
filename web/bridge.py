@@ -74,7 +74,8 @@ def _notate_main(argv):
 
 
 def make(opts_json):
-    """photo -> sound.wav -> picture.png, then sound.wav -> melody.wav + .mid"""
+    """photo -> sound.wav -> picture.png, sound.wav -> melody.wav + .mid,
+    then melody.wav -> melody.png"""
     o = json.loads(opts_json)
     rows, cols = int(o["rows"]), int(o["cols"])
     lens_params = ""
@@ -101,4 +102,11 @@ def make(opts_json):
                  "--bpm", str(o["bpm"]), "--grid", str(o["grid"]),
                  "--voices", str(o["voices"]), "--program", str(o["program"]),
                  "--dry-mix", str(o["dry_mix"]), "--verify"])
+
+    # Read a picture back out of the music too. Greyscale on purpose: the
+    # colour sidecar would paint the photo onto whatever gets decoded, even
+    # notes that carry none of it. Only --dry-mix brings the photo back.
+    log += _run(imgaudio.main,
+                [*grid, "--sr", "44100", "decode",
+                 f"{WORK}/melody.wav", f"{WORK}/melody.png"])
     return log

@@ -401,7 +401,7 @@ function show(d) {
   $("log").textContent = d.log.trim().replace(/\/work\//g, "");
   $("took").textContent = `made in ${((performance.now() - started) / 1000).toFixed(1)} s`;
   $("results").hidden = false;
-  status("Done. Press play.", "ready");
+  status("Done. Your sound, pictures and music are ready below.", "ready");
   $("results").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
 }
 refresh();

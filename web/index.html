@@ -111,6 +111,8 @@ pre { font: 12.5px/1.5 var(--mono); background: var(--bg); border-radius: 6px; p
 
 footer { font-size: 14px; color: var(--muted); display: grid; gap: 8px; padding-top: 4px; }
 footer a { color: var(--accent); }
+footer .build { font: 12.5px/1.5 var(--mono); font-variant-numeric: tabular-nums; }
+footer .build .nb, footer .build a { white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
 @media (max-width: 380px) { .fields { grid-template-columns: 1fr; } h1 { font-size: 2.2rem; } }
 </style>
@@ -254,6 +256,7 @@ footer a { color: var(--accent); }
   <footer>
     <p>Everything runs in your browser with Python (Pyodide). Nothing is uploaded.</p>
     <p>For timelapse batches, recurrence plots and the full set of flags, use the command-line tools: <a href="https://github.com/unixabg/imgaudio">github.com/unixabg/imgaudio</a></p>
+    <p class="build"><span id="version">Version unknown</span> · <a id="report" href="https://github.com/unixabg/imgaudio/issues/new" target="_blank" rel="noopener">Report a problem</a></p>
   </footer>
 </main>
 
@@ -262,6 +265,8 @@ const $ = (id) => document.getElementById(id);
 const MAX_SIDE = 1024;
 let photo = null;       // ArrayBuffer of a downscaled JPEG
 let ready = false, busy = false, catalog = null, started = 0;
+let build = null, pyodideVersion = "", lastError = "";
+const REPO = "https://github.com/unixabg/imgaudio";
 const urls = [];
 
 function status(text, kind = "") {
@@ -273,12 +278,45 @@ function refresh() {
   $("make").textContent = busy ? "Working…" : (ready ? "Make sound" : "Waiting for Python…");
 }
 
+// --- version and problem reports -----------------------------------------
+// version.json is written by web/build.sh: VERSION plus the commit it was built from.
+fetch("version.json", { cache: "no-store" }).then((r) => r.ok ? r.json() : null).then((v) => {
+  if (!v) return;
+  build = v;
+  const el = $("version");
+  el.textContent = `Version ${v.version} · build `;
+  const sha = v.commit.replace(/-dirty$/, "");
+  let ref = v.commit;
+  if (/^[0-9a-f]{7,}$/.test(sha) && sha === v.commit) {   // link only builds of a real commit
+    ref = document.createElement("a");
+    ref.href = `${REPO}/commit/${sha}`; ref.target = "_blank"; ref.rel = "noopener";
+    ref.textContent = v.commit;
+  }
+  const nb = (x) => { const s = document.createElement("span"); s.className = "nb"; s.append(x); return s; };
+  el.append(nb(ref), " · ", nb(v.date));
+  reportLink();
+}).catch(() => {});
+
+// Pre-fill a new issue with what a maintainer needs to reproduce it.
+function reportLink() {
+  const lines = [
+    "**What happened:**", "", "", "**What you expected:**", "", "",
+    "---",
+    `- imgaudio: ${build ? `${build.version} (build ${build.commit}, ${build.date})` : "unknown"}`,
+    `- Pyodide: ${pyodideVersion || "not loaded"}`,
+    `- Browser: ${navigator.userAgent}`,
+  ];
+  if (lastError) lines.push("", "Last error:", "```", lastError.slice(-1500), "```");
+  $("report").href = `${REPO}/issues/new?body=${encodeURIComponent(lines.join("\n"))}`;
+}
+reportLink();
+
 // --- worker ---------------------------------------------------------------
 const worker = new Worker("worker.js");
 worker.onmessage = ({ data }) => {
   if (data.type === "stage") status(data.text + "…");
   else if (data.type === "ready") {
-    ready = true; catalog = data.catalog; fillCatalog();
+    ready = true; catalog = data.catalog; pyodideVersion = data.pyodide || ""; fillCatalog(); reportLink();
     status(photo ? "Ready." : "Ready. Choose a photo or use the sample.", "ready");
     refresh();
   } else if (data.type === "error") {
@@ -286,6 +324,7 @@ worker.onmessage = ({ data }) => {
     status(data.fatal ? data.text + " Check your connection and reload."
                       : "That didn't work: " + data.text.split("\n").slice(-2).join(" "), "bad");
     $("log").textContent = data.text;
+    lastError = data.text; reportLink();
   } else if (data.type === "done") {
     busy = false; refresh(); show(data);
   }

@@ -36,7 +36,7 @@ sys.path.insert(0, "/app")
 os.chdir("/app")
 import bridge
 `);
-  say("ready", { catalog: JSON.parse(py.runPython("bridge.catalog()")) });
+  say("ready", { catalog: JSON.parse(py.runPython("bridge.catalog()")), pyodide: py.version });
 }
 
 function read(path) {

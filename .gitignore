@@ -38,3 +38,6 @@ tags
 *.swp
 .DS_Store
 _site/
+
+# Site icons are source files, not output images.
+!web/icons/*.png

@@ -13,7 +13,8 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 
 rm -rf "$out"
 mkdir -p "$out/py/lenses"
-cp "$root"/web/{index.html,worker.js,bridge.py} "$out/"
+cp "$root"/web/{index.html,worker.js,bridge.py,manifest.webmanifest} "$out/"
+cp -r "$root"/web/icons "$out/"
 cp "$root"/imgaudio.py "$root"/notate.py "$out/py/"
 cp "$root"/lenses/*.py "$out/py/lenses/"
 

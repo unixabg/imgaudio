@@ -178,7 +178,7 @@ def _music(o, src, grid, band=PHOTO_BAND):
                 "--midi", f"{WORK}/melody.mid",
                 "--base", str(o["base"]), "--scale", o["scale"], "--root", o["root"],
                 "--bpm", str(o["bpm"]), "--grid", str(o["grid"]),
-                "--voices", str(o["voices"]), "--program", str(o["program"]),
+                "--voices", str(o["voices"]), "--voice", o.get("voice", "vibes"),
                 "--dry-mix", str(o["dry_mix"]), "--f-lo", str(min(80, band["f_lo"])),
                 "--verify"])
 

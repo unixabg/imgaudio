@@ -230,12 +230,18 @@ footer .build .nb, footer .build a { white-space: nowrap; }
         </select>
       </div>
       <div class="field">
-        <label for="program">MIDI instrument</label>
-        <select id="program">
-          <option value="11">Vibraphone</option>
-          <option value="0">Piano</option>
-          <option value="46">Harp</option>
-          <option value="89">Pad</option>
+        <label for="voice">Instrument</label>
+        <select id="voice">
+          <optgroup label="Today">
+            <option value="vibes" selected>Vibraphone</option>
+            <option value="piano">Piano</option>
+            <option value="harp">Harp</option>
+            <option value="pad">Pad</option>
+          </optgroup>
+          <optgroup label="Ancient Mesopotamia">
+            <option value="lyre">Lyre (sammûm)</option>
+            <option value="reed">Reed pipe (embūbum)</option>
+          </optgroup>
         </select>
       </div>
     </div>
@@ -305,7 +311,7 @@ footer .build .nb, footer .build a { white-space: nowrap; }
         <a class="btn" id="d-melody" download="imgaudio-melody.wav">Save WAV</a>
         <a class="btn" id="d-midi" download="imgaudio-melody.mid">Save MIDI</a>
       </div>
-      <p class="hint">Open the MIDI file in GarageBand, a DAW, or any MIDI player.</p>
+      <p class="hint" id="midi-hint">Open the MIDI file in GarageBand, a DAW, or any MIDI player.</p>
     </div>
     <div class="out">
       <span class="label">The picture, read back out of the music</span>
@@ -682,7 +688,7 @@ $("make").onclick = async () => {
     base: Number($("base").value), scale: $("scale").value, root: $("root").value,
     bpm: Number($("bpm").value) || 100, grid: Number($("grid").value),
     voices: Math.max(1, Number($("voices").value) || 3),
-    program: Number($("program").value), dry_mix: Number($("dry").value),
+    voice: $("voice").value, dry_mix: Number($("dry").value),
   };
   busy = true; refresh(); started = performance.now();
   if (mode === "photo") {
@@ -729,6 +735,7 @@ function show(d) {
     melody: blobUrl(d.melodyPicture, "image/png"),
     melodyOctave: blobUrl(d.melodyPictureOctave, "image/png"),
     mix: Math.round(Number($("dry").value) * 100),
+    voice: $("voice").value,
   };
   applyPalette();
   const fromSound = d.mode === "sound";
@@ -741,6 +748,9 @@ function show(d) {
     const re = blobUrl(d.resound, "audio/wav");
     $("a-resound").src = re; $("d-resound").href = re;
   }
+  const ancient = { lyre: "a koto, the nearest plucked instrument", reed: "a shanai, a double reed" }[shown.voice];
+  $("midi-hint").textContent = "Open the MIDI file in GarageBand, a DAW, or any MIDI player." +
+    (ancient ? ` MIDI has no ancient instruments, so the file asks for ${ancient}; the sound here is the synthesized original.` : "");
   $("l-fidelity").textContent = fromSound ? "How much of your sound survived in the music" : "How much of the photo survived in the music";
   setMelodyHint();
   const fid = /spectral fidelity\s+([\d.]+)/.exec(d.log);

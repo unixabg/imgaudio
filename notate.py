@@ -390,12 +390,94 @@ def transcribe(sr, audio, root_midi, scale, bpm, grid, voices,
 # ---------------------------------------------------------------------------
 # Synthesis
 # ---------------------------------------------------------------------------
+# Instrument voices. Each is a small additive recipe, not a recording:
+#   harmonics  relative amplitude of partials 1, 2, 3, ...
+#   hdecay     extra decay per partial above the first (upper partials of a
+#              plucked or struck string die first, so the tone darkens)
+#   decay_mul  multiplies --decay for plucked and struck voices
+#   held       sustain for the note's length, then release (bowed, blown, pads)
+#   attack, release, tail  seconds
+#   stretch    piano-like inharmonicity: partial k sits at k*sqrt(1+B*k^2)
+#   vibrato    (rate Hz, depth as a fraction of pitch)
+#   chorus     detuned copies in cents, for width
+#   pluck      short noise burst at the onset; breath: noise under a blown note
+#   program    General MIDI instrument written to --midi files
+# "vibes" is notate.py's original tone and keeps its original code path.
+VOICES = {
+    "vibes": dict(program=11),
+    "piano": dict(harmonics=(1, .55, .4, .28, .18, .12, .08, .05), hdecay=.35,
+                  decay_mul=.7, attack=.002, tail=1.6, stretch=.0004, pluck=.02,
+                  program=0),
+    "harp":  dict(harmonics=(1, .5, .28, .14, .07, .04), hdecay=.5, decay_mul=.8,
+                  attack=.003, tail=1.6, pluck=.015, program=46),
+    "pad":   dict(harmonics=(1, .35, .18, .1, .05), held=True, attack=.35,
+                  release=.9, chorus=(-7, 0, 7), vibrato=(.3, .002), program=89),
+    # Ancient Mesopotamian instruments, informed by what is known of them:
+    # the lyre (sammûm) the Hurrian hymns were written for, as in the Lyres
+    # of Ur: plucked gut strings, bright onset that dulls fast, some buzz.
+    "lyre":  dict(harmonics=(1, .8, .65, .5, .38, .28, .2, .14, .1), hdecay=.9,
+                  decay_mul=1.1, attack=.001, tail=1.0, stretch=.00015, pluck=.05,
+                  program=107),     # GM has no lyre; koto is the nearest pluck
+    # The reed pipe (embūbum, also the name of a tuning), like the silver
+    # pipes from Ur: a double reed, sustained, buzzy, breathy, with vibrato.
+    "reed":  dict(harmonics=(1, .85, .7, .55, .42, .32, .24, .17, .12, .08),
+                  held=True, attack=.05, release=.12, vibrato=(5.2, .004),
+                  breath=.03, program=111),   # GM shanai, a double reed
+}
+
+
+def _voice_note(freq, dur_s, sr, v, decay, rng):
+    """One note in a VOICES recipe (any voice except "vibes")."""
+    held = v.get("held", False)
+    ring = max(dur_s, .1) + (v.get("release", .2) if held else v.get("tail", 1.2))
+    n = int(ring * sr)
+    t = np.arange(n) / sr
+
+    clock = t
+    if "vibrato" in v:
+        rate, depth = v["vibrato"]
+        clock = t - depth / (2 * np.pi * rate) * (np.cos(2 * np.pi * rate * t) - 1)
+
+    wave = np.zeros(n)
+    detunes = v.get("chorus", (0,))
+    for cents in detunes:
+        f0 = freq * 2 ** (cents / 1200)
+        for k, h in enumerate(v["harmonics"], start=1):
+            fk = f0 * k * np.sqrt(1 + v.get("stretch", 0) * k * k)
+            if fk > sr / 2 * .95:
+                break
+            partial = h * np.sin(2 * np.pi * fk * clock + rng.uniform(0, 2 * np.pi))
+            if not held:
+                partial *= np.exp(-t * decay * v.get("decay_mul", 1)
+                                  * (1 + v.get("hdecay", 0) * (k - 1)))
+            wave += partial
+    wave /= len(detunes)
+
+    env = np.ones(n)
+    atk = max(1, min(int(v.get("attack", .005) * sr), n))
+    env[:atk] = np.linspace(0, 1, atk)
+    if held:
+        stop = min(int(dur_s * sr), n)
+        env[stop:] *= np.exp(-(t[stop:] - t[stop]) / max(v.get("release", .2) / 4, 1e-3))
+
+    if v.get("pluck"):
+        burst = np.diff(rng.standard_normal(n + 1)) * np.exp(-t / .004)
+        wave += v["pluck"] * 8 * burst
+    if v.get("breath"):
+        noise = rng.standard_normal(n)
+        noise = np.convolve(noise, np.ones(8) / 8, mode="same")    # soften the hiss
+        wave += v["breath"] * 8 * noise
+    return wave * env
+
+
 def synthesize(notes, bpm, sr=44100, decay=2.5,
-               harmonics=(1.0, 0.45, 0.22, 0.1)):
-    """Render notes as struck/plucked tones with exponential decay."""
+               harmonics=(1.0, 0.45, 0.22, 0.1), voice="vibes"):
+    """Render notes in one of VOICES. "vibes" is the original struck tone."""
     beat_sec = 60.0 / bpm
     if not notes:
         return np.zeros(sr, dtype=np.float32)
+    if voice != "vibes":
+        return _synthesize_voice(notes, beat_sec, sr, decay, VOICES[voice])
     end_beat = max(n[0] + n[1] for n in notes)
     total = int((end_beat * beat_sec + 3.0) * sr)
     out = np.zeros(total, dtype=np.float32)
@@ -430,6 +512,27 @@ def synthesize(notes, bpm, sr=44100, decay=2.5,
     out[:fade] *= np.linspace(0, 1, fade)
     out[-fade:] *= np.linspace(1, 0, fade)
     return out
+
+
+def _synthesize_voice(notes, beat_sec, sr, decay, v):
+    rng = np.random.default_rng(0)           # same notes -> same file
+    end_beat = max(n[0] + n[1] for n in notes)
+    total = int((end_beat * beat_sec + 3.0) * sr)
+    out = np.zeros(total, dtype=np.float64)
+    for start_b, dur_b, freq, vel in notes:
+        start = int(start_b * beat_sec * sr)
+        note = _voice_note(freq, dur_b * beat_sec, sr, v, decay, rng)
+        n = min(len(note), total - start)
+        if n <= 8:
+            continue
+        out[start:start + n] += note[:n] * (vel / 127.0) ** 1.4 * 0.25
+    peak = np.max(np.abs(out))
+    if peak > 0:
+        out = out / peak * 0.85
+    fade = min(int(0.05 * sr), len(out) // 4)
+    out[:fade] *= np.linspace(0, 1, fade)
+    out[-fade:] *= np.linspace(1, 0, fade)
+    return out.astype(np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -518,7 +621,7 @@ def cmd_notes(args):
         print(f"  mean deviation from 12-TET: {np.mean(dev):.1f} cents "
               f"(max {np.max(dev):.1f})")
 
-    out = synthesize(notes, args.bpm, decay=args.decay)
+    out = synthesize(notes, args.bpm, decay=args.decay, voice=args.voice)
     dry_only = out                  # keep the pure transcription for --verify
 
     if args.dry_mix > 0.0:
@@ -541,6 +644,8 @@ def cmd_notes(args):
     print(f"wrote {args.output}  ({len(out)/44100:.1f}s)")
 
     if args.midi:
+        if args.program is None:
+            args.program = VOICES[args.voice]["program"]
         write_midi(args.midi, notes, args.bpm, program=args.program)
         note = " (pitches rounded to semitones)" if args.base == 60 else ""
         print(f"wrote {args.midi}  (GM program {args.program}){note}")
@@ -596,9 +701,15 @@ def build_parser():
     pn.add_argument("--decay",  type=float, default=2.5,
                     help="note decay rate; lower = longer sustain")
     pn.add_argument("--midi",   default=None, help="also write a .mid file")
-    pn.add_argument("--program", type=int, default=11,
-                    help="General MIDI program (11=vibraphone, 0=piano, "
-                         "46=harp, 89=pad)")
+    pn.add_argument("--voice", choices=list(VOICES), default="vibes",
+                    help="instrument for the WAV: vibes (the original tone), "
+                         "piano, harp, pad, and two ancient Mesopotamian "
+                         "instruments, lyre (sammûm) and reed (embūbum, reed "
+                         "pipe). Synthesized approximations, not recordings")
+    pn.add_argument("--program", type=int, default=None,
+                    help="General MIDI program for --midi; defaults to the "
+                         "voice's nearest (vibes 11, piano 0, harp 46, pad 89, "
+                         "lyre 107 koto, reed 111 shanai)")
     pn.add_argument("--verify", action="store_true",
                     help="re-synthesize the transcription and report how much "
                          "of the source's spectral structure survived")

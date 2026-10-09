@@ -503,6 +503,28 @@ tuning. `10_minor_pent` and `60_babylonian` should sound nearly identical;
 `--verify` fidelity so you can compare what the metric says against what you
 hear. They don't always agree.
 
+## Instruments
+
+`--voice` picks the instrument `notate.py` plays its notes on. Each is a small
+additive recipe (harmonics, how fast the upper ones fade, attack, pluck or
+breath noise, vibrato), not a recording:
+
+| `--voice` | sound | MIDI instrument |
+|---|---|---|
+| `vibes` | the original struck tone (default; output unchanged) | 11 vibraphone |
+| `piano` | bright strike, slightly stretched overtones, long ring | 0 piano |
+| `harp` | clean pluck | 46 harp |
+| `pad` | slow swell, three detuned voices, held | 89 pad |
+| `lyre` | the *sammûm* of the Hurrian hymns and the Lyres of Ur: gut-string pluck, bright onset that dulls fast | 107 koto |
+| `reed` | the *embūbum*, reed pipe, like the silver pipes of Ur: double reed, held, buzzy, breathy, vibrato | 111 shanai |
+
+General MIDI has no ancient instruments, so `--midi` files ask for the nearest
+one; the WAV is the synthesized original. `--program` overrides it.
+
+```bash
+python3 notate.py notes examples/h6-together.wav h6-lyre.wav --voice lyre --base 60 --scale nid_qablim --root A2
+```
+
 ## Keeping the source underneath
 
 `notate.py` discards the source entirely — it extracts pitch events and
@@ -644,7 +666,8 @@ Baseline for comparison: raw drone, base 10, `minor_pent`, defaults → 0.470.
 | `--voices` | 3 | max simultaneous notes |
 | `--peak-rel` | 0.25 | density dial; lower = many more notes |
 | `--decay` | 2.5 | lower = longer sustain |
-| `--program` | 11 | GM instrument: 0 piano, 11 vibes, 46 harp, 89 pad |
+| `--voice` | vibes | instrument for the WAV: vibes, piano, harp, pad, lyre, reed (see Instruments) |
+| `--program` | from voice | GM instrument for `--midi`; defaults to the voice's nearest |
 | `--dry-mix` | 0.0 | blend this much source back under the notes |
 | `--verify` | off | report how much of the source survived |
 | `--transcribe-opts` | — | key=value extension point |

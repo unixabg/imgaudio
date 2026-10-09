@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>imgaudio</title>
-<meta name="description" content="Turn a photo into sound, read the picture back out of it, and turn the sound into music. Runs entirely on your device.">
+<meta name="description" content="Turn a photo into sound, or find the picture hidden in any sound, then turn the sound into music. Runs entirely on your device.">
 <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
 <link rel="icon" href="icons/favicon-32.png" sizes="32x32" type="image/png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -82,6 +82,12 @@ button:disabled { opacity: .5; cursor: default; }
 button:focus-visible, .btn:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 
+.modes { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; }
+.modes button { min-height: 40px; border: 0; background: transparent; color: var(--muted); font-size: 15px; padding: 8px; }
+.modes button[aria-pressed="true"] { background: var(--surface); color: var(--fg); box-shadow: 0 1px 3px rgb(0 0 0 / .15); }
+.pane { display: grid; gap: 14px; }
+.wave { position: relative; border-radius: 6px; overflow: hidden; background: var(--bg); aspect-ratio: 3 / 1; max-width: 100%; display: grid; place-items: center; color: var(--muted); font-size: 14px; }
+.wave canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 .preview { border-radius: 6px; overflow: hidden; background: var(--bg); aspect-ratio: 3 / 2; display: grid; place-items: center; color: var(--muted); font-size: 14px; }
 .preview img { width: 100%; height: 100%; object-fit: cover; }
 
@@ -121,7 +127,7 @@ footer .build .nb, footer .build a { white-space: nowrap; }
 <main>
   <header>
     <h1>imgaudio</h1>
-    <p class="lede">Turn a photo into sound, read the picture back out of it, then turn the sound into music.</p>
+    <p class="lede">Turn a photo into sound, or find the picture hidden in any sound. Then turn the sound into music.</p>
     <div>
       <div class="bar" aria-hidden="true"></div>
       <div class="ticks" aria-hidden="true"><span>80 Hz</span><span>800 Hz</span><span>8 kHz</span></div>
@@ -130,23 +136,56 @@ footer .build .nb, footer .build a { white-space: nowrap; }
   </header>
 
   <section aria-labelledby="h-photo">
-    <h2 id="h-photo"><span class="n">01</span>Choose a photo</h2>
-    <div class="preview" id="preview">No photo yet</div>
-    <div class="pick">
-      <label class="btn" for="file">Choose photo</label>
-      <button type="button" id="sample">Use a sample</button>
+    <h2 id="h-photo"><span class="n">01</span>Start from a photo or a sound</h2>
+    <div class="modes" role="group" aria-label="Start from">
+      <button type="button" id="mode-photo" aria-pressed="true">Photo</button>
+      <button type="button" id="mode-sound" aria-pressed="false">Sound</button>
     </div>
-    <input type="file" id="file" accept="image/*">
-    <p class="hint" id="photo-note">The photo stays on your device. Large photos are shrunk before processing, since the sound only uses a few hundred points across.</p>
+    <div class="pane" id="photo-pane">
+      <div class="preview" id="preview">No photo yet</div>
+      <div class="pick">
+        <label class="btn" for="file">Choose photo</label>
+        <button type="button" id="sample">Use a sample</button>
+      </div>
+      <input type="file" id="file" accept="image/*">
+      <p class="hint" id="photo-note">The photo stays on your device. Large photos are shrunk before processing, since the sound only uses a few hundred points across.</p>
+    </div>
+    <div class="pane" id="sound-pane" hidden>
+      <div class="wave" id="wave"><span id="wave-empty">No sound yet</span><canvas id="wave-canvas" hidden></canvas></div>
+      <div class="pick">
+        <label class="btn" for="sfile">Choose sound</label>
+        <button type="button" id="ssample">Use a sample</button>
+      </div>
+      <input type="file" id="sfile" accept="audio/*,.wav,.mp3,.m4a,.aac,.ogg,.oga,.opus,.flac,.webm">
+      <div class="fields" id="trim" hidden>
+        <div class="field wide">
+          <label for="start">Start at <span id="start-val">0:00</span></label>
+          <input type="range" id="start" min="0" max="0" step="0.5" value="0">
+        </div>
+        <div class="field">
+          <label for="length">Length</label>
+          <select id="length">
+            <option value="20">20 seconds</option>
+            <option value="30" selected>30 seconds</option>
+            <option value="60">60 seconds</option>
+          </select>
+        </div>
+      </div>
+      <p class="hint" id="sound-note">Any recording works: a voice memo, birdsong, music, or a WAV saved from this page. Twenty to sixty seconds reads best, so longer sounds are trimmed. The sound stays on your device.</p>
+    </div>
   </section>
 
   <section aria-labelledby="h-settings">
-    <h2 id="h-settings"><span class="n">02</span>Pick how it sounds</h2>
+    <h2 id="h-settings"><span class="n">02</span><span id="settings-title">Pick how it sounds</span></h2>
     <div class="fields">
       <div class="field wide">
         <label for="lens">Lens</label>
         <select id="lens"><option value="raw">raw</option></select>
         <span class="desc" id="lens-desc">plain brightness, the honest spectrogram</span>
+      </div>
+      <div class="field wide" id="low-field" hidden>
+        <label class="check"><input type="checkbox" id="low"> Low-pitched sound</label>
+        <span class="desc">Reads 40 to 4000 Hz instead of 80 to 8000 Hz. Tick it if everything sits at the bottom of the picture.</span>
       </div>
       <div class="field">
         <label for="base">Tuning</label>
@@ -206,9 +245,9 @@ footer .build .nb, footer .build a { white-space: nowrap; }
         <div class="field wide">
           <label for="dry">Picture under the music: <span id="dry-val">0%</span></label>
           <input type="range" id="dry" min="0" max="0.6" step="0.1" value="0">
-          <span class="desc">Mixes the photo's sound back beneath the notes, so the picture partly survives in the music.</span>
+          <span class="desc">Mixes the original sound back beneath the notes, so its picture partly survives in the music.</span>
         </div>
-        <div class="field wide">
+        <div class="field wide" id="color-field">
           <label class="check"><input type="checkbox" id="color" checked> Bring the colour back</label>
           <span class="desc">Sound carries brightness only. This keeps a tiny colour map beside it so the recovered picture is in colour.</span>
         </div>
@@ -220,13 +259,20 @@ footer .build .nb, footer .build a { white-space: nowrap; }
   <section aria-labelledby="h-results" id="results" hidden>
     <h2 id="h-results"><span class="n">03</span>Listen <span class="desc" id="took"></span></h2>
     <div class="out">
-      <span class="label">The photo as sound</span>
+      <span class="label" id="l-sound">The photo as sound</span>
       <audio id="a-sound" controls preload="auto"></audio>
       <div class="row"><a class="btn" id="d-sound" download="imgaudio-sound.wav">Save WAV</a></div>
     </div>
     <div class="out">
-      <span class="label">The picture, read back out of that sound</span>
-      <img class="picture" id="picture" alt="Image decoded from the generated audio">
+      <span class="label" id="l-picture">The picture, read back out of that sound</span>
+      <img class="picture" id="picture" alt="Image decoded from the sound">
+      <p class="hint" id="picture-hint" hidden>Low pitches at the bottom, high at the top, time from left to right. If everything sits at the bottom, tick Low-pitched sound and run it again. If it's a flat grey field, try Quick detail.</p>
+    </div>
+    <div class="out" id="resound-block" hidden>
+      <span class="label">That picture, played back as sound</span>
+      <audio id="a-resound" controls preload="auto"></audio>
+      <div class="row"><a class="btn" id="d-resound" download="imgaudio-picture-sound.wav">Save WAV</a></div>
+      <p class="hint">The round trip: your sound became a picture, and the picture became sound again. What you hear is what the picture kept.</p>
     </div>
     <div class="out">
       <span class="label">The sound as music</span>
@@ -243,7 +289,7 @@ footer .build .nb, footer .build a { white-space: nowrap; }
       <p class="hint" id="melody-hint">The music is made of new notes, so this mostly shows the notes. Raise "Picture under the music" in More settings to bring the photo back. Shown in grey because colour would be painted on, not recovered.</p>
     </div>
     <div class="out">
-      <span class="label">How much of the photo survived in the music</span>
+      <span class="label" id="l-fidelity">How much of the photo survived in the music</span>
       <span class="score" id="fidelity">–</span>
       <p class="hint">Spectral fidelity: 1.0 is identical, 0.04 is noise.</p>
       <details>
@@ -264,6 +310,9 @@ footer .build .nb, footer .build a { white-space: nowrap; }
 const $ = (id) => document.getElementById(id);
 const MAX_SIDE = 1024;
 let photo = null;       // ArrayBuffer of a downscaled JPEG
+let sound = null;       // AudioBuffer of the chosen recording, full length
+let mode = "photo";     // what the run starts from: "photo" or "sound"
+const SR = 22050;       // imgaudio's default sample rate
 let ready = false, busy = false, catalog = null, started = 0;
 let build = null, pyodideVersion = "", lastError = "";
 const REPO = "https://github.com/unixabg/imgaudio";
@@ -274,9 +323,33 @@ function status(text, kind = "") {
   $("status").className = "status " + kind;
 }
 function refresh() {
-  $("make").disabled = !(ready && photo && !busy);
-  $("make").textContent = busy ? "Working…" : (ready ? "Make sound" : "Waiting for Python…");
+  const have = mode === "photo" ? photo : sound;
+  $("make").disabled = !(ready && have && !busy);
+  $("make").textContent = busy ? "Working…"
+    : !ready ? "Waiting for Python…"
+    : mode === "photo" ? "Make sound" : "Find the picture";
 }
+function readyText() {
+  if (mode === "photo") return photo ? "Ready." : "Ready. Choose a photo or use the sample.";
+  return sound ? "Ready." : "Ready. Choose a sound or use the sample.";
+}
+
+// --- start from a photo or a sound ---------------------------------------
+function setMode(m) {
+  mode = m;
+  $("mode-photo").setAttribute("aria-pressed", m === "photo");
+  $("mode-sound").setAttribute("aria-pressed", m === "sound");
+  $("photo-pane").hidden = m !== "photo";
+  $("sound-pane").hidden = m !== "sound";
+  $("low-field").hidden = m !== "sound";
+  $("color-field").hidden = m !== "photo";   // a recording has no colour to keep
+  $("settings-title").textContent = m === "photo" ? "Pick how it sounds" : "Pick how to read it";
+  if (ready && !busy) status(readyText(), "ready");
+  refresh();
+  if (m === "sound") drawWave();
+}
+$("mode-photo").onclick = () => setMode("photo");
+$("mode-sound").onclick = () => setMode("sound");
 
 // --- version and problem reports -----------------------------------------
 // version.json is written by web/build.sh: VERSION plus the commit it was built from.
@@ -317,7 +390,7 @@ worker.onmessage = ({ data }) => {
   if (data.type === "stage") status(data.text + "…");
   else if (data.type === "ready") {
     ready = true; catalog = data.catalog; pyodideVersion = data.pyodide || ""; fillCatalog(); reportLink();
-    status(photo ? "Ready." : "Ready. Choose a photo or use the sample.", "ready");
+    status(readyText(), "ready");
     refresh();
   } else if (data.type === "error") {
     busy = false; refresh();
@@ -411,19 +484,165 @@ $("sample").onclick = () => {
   c.toBlob((b) => usePhoto(b, "Sample sunset"), "image/jpeg", 0.92);
 };
 
+// --- sound: decode any format the browser knows, trim, resample ----------
+let actx = null;
+const audioContext = () => actx || (actx = new (window.AudioContext || window.webkitAudioContext)());
+const MAX_BYTES = 100 * 1024 * 1024;
+const fmt = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+let soundLabel = "";
+
+function decodeAudio(bytes) {
+  const ctx = audioContext();
+  // Older Safari only has the callback form; newer browsers return a promise.
+  return new Promise((ok, fail) => {
+    const p = ctx.decodeAudioData(bytes, ok, fail);
+    if (p && p.then) p.then(ok, fail);
+  });
+}
+
+function trimWindow() {
+  const len = Math.min(Number($("length").value), sound.duration);
+  const start = Math.min(Number($("start").value), Math.max(0, sound.duration - len));
+  return { start, len };
+}
+
+function updateTrim() {
+  if (!sound) return;
+  const dur = sound.duration, len = Number($("length").value);
+  $("trim").hidden = dur <= 20;
+  $("start").max = Math.max(0, dur - len);
+  const { start, len: used } = trimWindow();
+  $("start").value = start;
+  $("start-val").textContent = fmt(start);
+  $("sound-note").textContent = dur > used + 0.25
+    ? `${soundLabel}: ${fmt(dur)} long. Using ${Math.round(used)} seconds from ${fmt(start)}; slide to pick another part.`
+    : `${soundLabel}: ${dur.toFixed(1)} seconds.`;
+  drawWave();
+}
+$("start").oninput = updateTrim;
+$("length").onchange = updateTrim;
+
+// Waveform with the part that will be used highlighted.
+function drawWave() {
+  const c = $("wave-canvas");
+  if (!sound || $("sound-pane").hidden) return;
+  c.hidden = false; $("wave-empty").hidden = true;
+  const dpr = window.devicePixelRatio || 1, w = c.clientWidth, h = c.clientHeight;
+  if (!w || !h) return;
+  c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);
+  const g = c.getContext("2d"); g.scale(dpr, dpr);
+  const css = getComputedStyle(document.documentElement);
+  const muted = css.getPropertyValue("--muted").trim(), accent = css.getPropertyValue("--accent").trim();
+  const data = sound.getChannelData(0), dur = sound.duration;
+  const { start, len } = trimWindow();
+  const x0 = start / dur * w, x1 = (start + len) / dur * w;
+  g.fillStyle = accent; g.globalAlpha = 0.14; g.fillRect(x0, 0, x1 - x0, h); g.globalAlpha = 1;
+  const per = data.length / w;
+  for (let x = 0; x < w; x++) {
+    let lo = 1, hi = -1;
+    const a = Math.floor(x * per), b = Math.min(data.length, Math.floor((x + 1) * per));
+    for (let i = a; i < b; i += Math.max(1, Math.floor((b - a) / 400))) { const v = data[i]; if (v < lo) lo = v; if (v > hi) hi = v; }
+    if (hi < lo) continue;
+    g.fillStyle = x >= x0 && x <= x1 ? accent : muted;
+    g.fillRect(x, (1 - hi) * h / 2, 1, Math.max(1, (hi - lo) * h / 2));
+  }
+}
+window.addEventListener("resize", drawWave);
+
+function useSound(buffer, label) {
+  if (buffer.duration < 1) {
+    status("That sound is under a second long. Pick something at least a few seconds long.", "bad");
+    return;
+  }
+  sound = buffer; soundLabel = label;
+  $("start").value = 0;
+  updateTrim();
+  if (ready) status("Ready.", "ready");
+  refresh();
+}
+
+$("sfile").onchange = async (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  if (f.size > MAX_BYTES) {
+    status("That file is over 100 MB. Trim it to a few minutes first, or pick a shorter recording.", "bad");
+    return;
+  }
+  status("Opening " + (f.name || "sound") + "…");
+  try { useSound(await decodeAudio(await f.arrayBuffer()), f.name || "Sound"); }
+  catch { status("Couldn't open that file as sound. Try a WAV, MP3 or M4A recording.", "bad"); }
+};
+
+// Sample sound: a slow melody, birdlike chirps and a rising whistle, made here
+// so there is no extra file to fetch. Each one draws a different shape.
+$("ssample").onclick = () => {
+  const n = SR * 20, x = new Float32Array(n), TAU = 2 * Math.PI;
+  [220, 262, 330, 392, 330, 262, 294, 349].forEach((f, i) => {
+    const s = Math.floor(i * 2.4 * SR);
+    for (let k = 0; k < 2 * SR && s + k < n; k++) x[s + k] += 0.35 * Math.sin(TAU * f * k / SR) * Math.exp(-1.2 * k / SR);
+  });
+  for (let c = 0; c < 12; c++) {
+    const s = Math.floor((0.8 + c * 1.55) * SR), m = Math.floor(0.18 * SR);
+    for (let k = 0; k < m; k++) {
+      const t = k / SR, win = 0.5 - 0.5 * Math.cos(TAU * k / (m - 1));
+      x[s + k] += 0.25 * win * Math.sin(TAU * (2500 * t + 1500 / 0.18 * t * t / 2));
+    }
+  }
+  for (let k = 14 * SR; k < 19 * SR; k++) {
+    const t = (k - 14 * SR) / SR;
+    x[k] += 0.2 * Math.sin(TAU * (100 * t + 390 / 2 * t * t));
+  }
+  let peak = 0; for (const v of x) peak = Math.max(peak, Math.abs(v));
+  for (let k = 0; k < n; k++) x[k] = x[k] / peak * 0.9;
+  const buf = audioContext().createBuffer(1, n, SR);
+  buf.copyToChannel ? buf.copyToChannel(x, 0) : buf.getChannelData(0).set(x);
+  useSound(buf, "Sample: melody, chirps and a rising whistle");
+};
+
+// The chosen part as 16-bit mono WAV at imgaudio's sample rate.
+async function clipWav() {
+  const { start, len } = trimWindow();
+  const frames = Math.max(1, Math.round(len * SR));
+  const Off = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  const off = new Off(1, frames, SR);        // one channel: stereo is mixed down
+  const src = off.createBufferSource();
+  src.buffer = sound; src.connect(off.destination); src.start(0, start, len);
+  const out = (await off.startRendering()).getChannelData(0);
+  const wav = new DataView(new ArrayBuffer(44 + out.length * 2));
+  const str = (o, t) => { for (let i = 0; i < t.length; i++) wav.setUint8(o + i, t.charCodeAt(i)); };
+  str(0, "RIFF"); wav.setUint32(4, 36 + out.length * 2, true); str(8, "WAVE");
+  str(12, "fmt "); wav.setUint32(16, 16, true); wav.setUint16(20, 1, true); wav.setUint16(22, 1, true);
+  wav.setUint32(24, SR, true); wav.setUint32(28, SR * 2, true); wav.setUint16(32, 2, true); wav.setUint16(34, 16, true);
+  str(36, "data"); wav.setUint32(40, out.length * 2, true);
+  for (let i = 0; i < out.length; i++) wav.setInt16(44 + i * 2, Math.max(-1, Math.min(1, out[i])) * 32767, true);
+  return wav.buffer;
+}
+
 // --- run ------------------------------------------------------------------
-$("make").onclick = () => {
-  if (!ready || !photo) return;
+$("make").onclick = async () => {
+  if (!ready || busy || !(mode === "photo" ? photo : sound)) return;
   const [rows, cols] = $("detail").value.split("x").map(Number);
-  busy = true; refresh(); started = performance.now();
-  status("Making sound…");
-  worker.postMessage({ type: "make", photo: photo.slice(0), opts: {
-    rows, cols, lens: $("lens").value, color: $("color").checked,
+  const opts = {
+    rows, cols, lens: $("lens").value, color: $("color").checked, low: $("low").checked,
     base: Number($("base").value), scale: $("scale").value, root: $("root").value,
     bpm: Number($("bpm").value) || 100, grid: Number($("grid").value),
     voices: Math.max(1, Number($("voices").value) || 3),
     program: Number($("program").value), dry_mix: Number($("dry").value),
-  }});
+  };
+  busy = true; refresh(); started = performance.now();
+  if (mode === "photo") {
+    status("Making sound…");
+    worker.postMessage({ type: "make", mode, photo: photo.slice(0), opts });
+    return;
+  }
+  try {
+    status("Preparing your sound…");
+    const input = await clipWav();
+    status("Finding the picture…");
+    worker.postMessage({ type: "make", mode, input, opts }, [input]);
+  } catch (err) {
+    busy = false; refresh();
+    status("Couldn't prepare that sound: " + (err.message || err), "bad");
+  }
 };
 
 function blobUrl(bytes, type) {
@@ -437,10 +656,23 @@ function show(d) {
   $("d-midi").href = blobUrl(d.midi, "audio/midi");
   $("picture").src = blobUrl(d.picture, "image/png");
   $("melody-picture").src = blobUrl(d.melodyPicture, "image/png");
+  const fromSound = d.mode === "sound";
+  $("l-sound").textContent = fromSound ? "Your sound (the part used)" : "The photo as sound";
+  $("d-sound").download = fromSound ? "imgaudio-clip.wav" : "imgaudio-sound.wav";
+  $("l-picture").textContent = fromSound ? "The picture hidden in your sound" : "The picture, read back out of that sound";
+  $("picture-hint").hidden = !fromSound;
+  $("resound-block").hidden = !(fromSound && d.resound);
+  if (fromSound && d.resound) {
+    const re = blobUrl(d.resound, "audio/wav");
+    $("a-resound").src = re; $("d-resound").href = re;
+  }
+  $("l-fidelity").textContent = fromSound ? "How much of your sound survived in the music" : "How much of the photo survived in the music";
   const mix = Math.round(Number($("dry").value) * 100);
-  $("melody-hint").textContent = mix > 0
-    ? `${mix}% of the photo's sound is mixed under the notes, so the photo shows through them. Shown in grey because colour would be painted on, not recovered.`
-    : `The music is made of new notes, so this mostly shows the notes. Raise "Picture under the music" in More settings to bring the photo back. Shown in grey because colour would be painted on, not recovered.`;
+  const src = fromSound ? "your sound" : "the photo's sound", pic = fromSound ? "its picture" : "the photo";
+  const grey = fromSound ? "" : " Shown in grey because colour would be painted on, not recovered.";
+  $("melody-hint").textContent = (mix > 0
+    ? `${mix}% of ${src} is mixed under the notes, so ${pic} shows through them.`
+    : `The music is made of new notes, so this mostly shows the notes. Raise "Picture under the music" in More settings to bring ${pic} back.`) + grey;
   const fid = /spectral fidelity\s+([\d.]+)/.exec(d.log);
   $("fidelity").textContent = fid ? fid[1] : "–";
   $("log").textContent = d.log.trim().replace(/\/work\//g, "");

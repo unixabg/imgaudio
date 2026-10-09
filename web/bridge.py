@@ -73,40 +73,65 @@ def _notate_main(argv):
     notate.main()
 
 
-def make(opts_json):
-    """photo -> sound.wav -> picture.png, sound.wav -> melody.wav + .mid,
-    then melody.wav -> melody.png"""
-    o = json.loads(opts_json)
+def _grid(o):
+    """--rows/--cols (and --lens-params) shared by every step of one run."""
     rows, cols = int(o["rows"]), int(o["cols"])
     lens_params = ""
     if o["lens"] == "spectral":
         # README: quadrant breaks the mirror symmetry; the spectrum is square.
         lens_params, cols = "mode=quadrant", rows
+    return ["--rows", str(rows), "--cols", str(cols)], lens_params
 
-    grid = ["--rows", str(rows), "--cols", str(cols)]
+
+def _music(o, src, grid, band=()):
+    """src -> melody.wav + .mid (with --verify), then melody.wav -> melody.png."""
+    log = _run(_notate_main,
+               ["notes", src, f"{WORK}/melody.wav",
+                "--midi", f"{WORK}/melody.mid",
+                "--base", str(o["base"]), "--scale", o["scale"], "--root", o["root"],
+                "--bpm", str(o["bpm"]), "--grid", str(o["grid"]),
+                "--voices", str(o["voices"]), "--program", str(o["program"]),
+                "--dry-mix", str(o["dry_mix"]), *band[:2], "--verify"])
+
+    # Read a picture back out of the music too. Greyscale on purpose: the
+    # colour sidecar would paint the photo onto whatever gets decoded, even
+    # notes that carry none of it. Only --dry-mix brings the source back.
+    log += _run(imgaudio.main,
+                [*grid, *band, "--sr", "44100", "decode",
+                 f"{WORK}/melody.wav", f"{WORK}/melody.png"])
+    return log
+
+
+def make(opts_json):
+    """Start from a photo: photo -> sound.wav -> picture.png, then the music."""
+    o = json.loads(opts_json)
+    grid, lens_params = _grid(o)
     color = ["--color"] if o["color"] else []
 
     log = _run(imgaudio.main,
                ["--auto-prep", *grid, "--lens", o["lens"],
                 "--lens-params", lens_params, *color,
                 "encode", f"{WORK}/photo.jpg", f"{WORK}/sound.wav"])
-
     log += _run(imgaudio.main,
                 [*grid, *color, "decode", f"{WORK}/sound.wav", f"{WORK}/picture.png"])
+    return log + _music(o, f"{WORK}/sound.wav", grid)
 
-    base = str(o["base"])
-    log += _run(_notate_main,
-                ["notes", f"{WORK}/sound.wav", f"{WORK}/melody.wav",
-                 "--midi", f"{WORK}/melody.mid",
-                 "--base", base, "--scale", o["scale"], "--root", o["root"],
-                 "--bpm", str(o["bpm"]), "--grid", str(o["grid"]),
-                 "--voices", str(o["voices"]), "--program", str(o["program"]),
-                 "--dry-mix", str(o["dry_mix"]), "--verify"])
 
-    # Read a picture back out of the music too. Greyscale on purpose: the
-    # colour sidecar would paint the photo onto whatever gets decoded, even
-    # notes that carry none of it. Only --dry-mix brings the photo back.
+def make_from_sound(opts_json):
+    """Start from a recording (README: "Starting from audio instead"):
+    input.wav -> picture.png, picture.png -> resound.wav (the round trip),
+    then the music from the recording itself."""
+    o = json.loads(opts_json)
+    grid, lens_params = _grid(o)
+    # README: content squashed at the bottom means the sound sits below the
+    # default 80-8000 Hz band; 40-4000 Hz reads low-pitched recordings.
+    band = ["--f-lo", "40", "--f-hi", "4000"] if o.get("low") else []
+
+    log = _run(imgaudio.main,
+               [*grid, *band, "--lens", o["lens"], "--lens-params", lens_params,
+                "decode", f"{WORK}/input.wav", f"{WORK}/picture.png"])
+    # Play the picture back as sound. No --auto-prep: a decoded picture is
+    # already a spectrogram, so it must not be clipped or inverted like a photo.
     log += _run(imgaudio.main,
-                [*grid, "--sr", "44100", "decode",
-                 f"{WORK}/melody.wav", f"{WORK}/melody.png"])
-    return log
+                [*grid, *band, "encode", f"{WORK}/picture.png", f"{WORK}/resound.wav"])
+    return log + _music(o, f"{WORK}/input.wav", grid, band)

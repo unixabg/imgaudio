@@ -1,7 +1,7 @@
 {
   "name": "imgaudio",
   "short_name": "imgaudio",
-  "description": "Turn a photo into sound, read the picture back out of it, and turn the sound into music.",
+  "description": "Turn a photo into sound, or find the picture hidden in any sound, then turn the sound into music.",
   "start_url": ".",
   "display": "browser",
   "background_color": "#2b2f5c",

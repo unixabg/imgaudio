@@ -46,20 +46,24 @@ function read(path) {
 onmessage = async ({ data }) => {
   if (data.type !== "make") return;
   try {
-    for (const f of ["sound.wav", "sound.chroma.png", "picture.png", "melody.wav", "melody.mid", "melody.png"]) {
+    for (const f of ["photo.jpg", "input.wav", "sound.wav", "sound.chroma.png", "picture.png",
+                     "resound.wav", "melody.wav", "melody.mid", "melody.png"]) {
       try { py.FS.unlink("/work/" + f); } catch {}
     }
-    py.FS.writeFile("/work/photo.jpg", new Uint8Array(data.photo));
+    const fromSound = data.mode === "sound";
+    if (fromSound) py.FS.writeFile("/work/input.wav", new Uint8Array(data.input));
+    else py.FS.writeFile("/work/photo.jpg", new Uint8Array(data.photo));
     py.globals.set("opts_json", JSON.stringify(data.opts));
-    const log = py.runPython("bridge.make(opts_json)");
+    const log = py.runPython(fromSound ? "bridge.make_from_sound(opts_json)" : "bridge.make(opts_json)");
     const out = {
-      sound: read("/work/sound.wav"),
+      sound: read(fromSound ? "/work/input.wav" : "/work/sound.wav"),
+      resound: fromSound ? read("/work/resound.wav") : null,
       picture: read("/work/picture.png"),
       melody: read("/work/melody.wav"),
       midi: read("/work/melody.mid"),
       melodyPicture: read("/work/melody.png"),
     };
-    postMessage({ type: "done", log, ...out },
+    postMessage({ type: "done", mode: data.mode, log, ...out },
       Object.values(out).filter(Boolean).map((a) => a.buffer));
   } catch (err) {
     say("error", { text: String(err.message || err) });

@@ -88,6 +88,19 @@ use the same scale. Encode refuses an `--f-hi` at or above half the sample rate,
 since those pitches can't be represented and would fold back down as noise. The
 full range is slower; trim to the part you care about first.
 
+When something is buried under louder sound, `--lens reveal` compares each pitch
+with its own usual behaviour instead of with the whole clip. Hum, drones and
+steady noise fade; anything rare for its pitch lights up, however quiet:
+
+```bash
+python3 imgaudio.py --lens reveal decode buried.wav look.png
+python3 imgaudio.py --lens reveal --lens-params smooth=0,zmax=4 decode buried.wav sharper.png
+```
+
+In a test, a picture mixed 20 dB under noise and mains hum went from r = 0.09 to
+r = 0.33 against the original. `smooth` (default 1) holds shapes together through
+noise; `zmax` (default 6) sets how unusual counts as full brightness.
+
 Once you've seen the honest version, the lenses are purely aesthetic — you're
 not undoing anything, just choosing how to render it:
 
@@ -303,6 +316,7 @@ python3 imgaudio.py --auto-prep --lens fractal encode img.jpg out.wav
 | `edges` | contours (retinal lateral inhibition) |
 | `fractal` | texture roughness — natural vs man-made |
 | `phyllotaxis` | golden-angle spiral read order, center-out |
+| `reveal` | what is unusual for its pitch — steady sound fades, rare events light up |
 | `spectral` | 2D FFT — spatial frequency and orientation |
 
 `spectral` has four modes via `--lens-params mode=...`:
@@ -412,7 +426,7 @@ The twelve notes are spaced evenly around the colour wheel rather than at their
 true wavelength colours, which would put F#, G and G# in one red.
 
 A sidecar still wins when `--color` finds one. The palette only means pitch
-while rows are pitches, so it suits `raw`, `edges` and `fractal`; `spectral`
+while rows are pitches, so it suits `raw`, `edges`, `fractal` and `reveal`; `spectral`
 and `phyllotaxis` rearrange the picture. Encode reads brightness, so re-encode
 the grey picture rather than the coloured one.
 

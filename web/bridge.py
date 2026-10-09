@@ -48,7 +48,7 @@ _spectral_py._fft_helper = _fft_helper_wasm
 
 # Lenses that keep each picture row at its own pitch, so colouring rows by
 # pitch still means something. spectral and phyllotaxis rearrange the picture.
-PITCH_LENSES = {"raw", "edges", "fractal"}
+PITCH_LENSES = {"raw", "edges", "fractal", "reveal"}
 
 
 def catalog():

@@ -636,6 +636,18 @@ back in shape on one. Both are 44.1 kHz, so they also work in the web page's
 Sound mode with Frequency range set to Full. `examples/hidden-pictures.py`
 rebuilds them and shows exactly how they were made.
 
+**`examples/h6-together.wav`** and **`examples/h6-in-turn.wav`** — the opening of
+the Hymn to Nikkal (Hurrian hymn h.6, Ugarit, about 1400 BCE), the oldest
+substantially complete written music known, rendered from the tablet's own
+notation: names of lyre string pairs, each with a number. The lyre is tuned in
+the `babylonian` scale, the same stacked fifths and fourths the Old Babylonian
+tuning tablets describe. Scholars disagree on whether each pair sounded together
+(Kilmer) or in turn (Dumbrill), so there is one clip of each. Only the first two
+notation lines are included, as transcribed from Laroche, *Ugaritica V* (1968);
+`examples/hurrian-h6.py` lists exactly what comes from the sources and what is a
+choice, and new lines can be added to its `NOTATION` list. See them with
+`python3 imgaudio.py --palette octave --f-lo 100 --f-hi 1600 decode examples/h6-together.wav h6.png`.
+
 ## Writing a lens
 
 Copy `lenses/_example.py`, rename, implement three things:

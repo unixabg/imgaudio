@@ -25,7 +25,8 @@ What is from the sources, and what is a choice made here:
 
   Choices made here (each is one reading among several)
     - Strings 1-7 rise in pitch and are tuned to notate.py's "babylonian"
-      scale, stacked fifths and fourths from A3. Real string order, register
+      scale (the nid qablim tuning named in the colophon, on Kilmer's rising
+      reading), stacked fifths and fourths from A3. Real string order, register
       and the effect of the nid qabli tuning are debated.
     - The numbers are read as repeats. Others read them as durations or beats.
     - "uš-ta-ma-a-ri" ends line 1 but is not a string-pair term; it is skipped.
@@ -68,7 +69,7 @@ NOTATION = [
 ]
 
 ROOT_HZ = notate.midi_to_hz(notate.note_name_to_midi("A3"))
-TUNING = notate.RATIO_SCALES["babylonian"]          # seven ratios, string 1 = 1/1
+TUNING = notate.RATIO_SCALES["nid_qablim"]          # the colophon's tuning; equals "babylonian"
 BPM = 80
 SR = 22050
 

@@ -460,6 +460,36 @@ Standard MIDI notes are equal-tempered integers, so `--midi` rounds base-60
 pitches to the nearest semitone. The WAV carries the true tuning; the `.mid` is
 an approximation.
 
+### The seven Babylonian tunings
+
+The Old Babylonian tuning tablets name seven lyre tunings and a cycle for moving
+between them by retuning one string at a time. `--base 60` offers all seven,
+each built from pure fifths the way the tablets build them, so every ratio is
+made of 2s and 3s and terminates exactly in sexagesimal:
+
+| `--scale` | strings 1–7 (Kilmer) | today's mode |
+|---|---|---|
+| `isartum` | E F G A B C D | Phrygian |
+| `kitmum` | E F♯ G A B C D | Aeolian |
+| `embubum` | E F♯ G A B C♯ D | Dorian |
+| `pitum` | E F♯ G♯ A B C♯ D | Mixolydian |
+| `nid_qablim` | E F♯ G♯ A B C♯ D♯ | Ionian (major) |
+| `nis_gabari` | E F♯ G♯ A♯ B C♯ D♯ | Lydian |
+| `qablitum` | E♯ F♯ G♯ A♯ B C♯ D♯ | Locrian |
+
+Each step down the table raises one note a semitone, as the retuning texts
+describe. `nid_qablim` is identical to `babylonian`, and it is the tuning the
+Hymn to Nikkal's colophon names: `notate.py` scores `examples/h6-together.wav`
+highest in it (0.564, falling off around the cycle). The names follow Kilmer's
+reading of the strings as rising, from Crickmore (2008). West (1994) reads them
+as falling, which keeps the same seven patterns but moves the names: on his
+reading `isartum` is the major pattern. Interval sizes are a reconstruction too;
+the tablets tune by ear and give no numbers.
+
+```bash
+python3 notate.py notes in.wav out.wav --base 60 --scale nid_qablim --root A2
+```
+
 ### Hearing the difference
 
 ```bash

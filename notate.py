@@ -92,6 +92,50 @@ RATIO_SCALES = {
     "harmonic":        [1/1, 9/8, 5/4, 11/8, 3/2, 13/8, 7/4, 15/8],
 }
 
+# The seven Old Babylonian lyre tunings. The tuning tablets name seven
+# tunings and give a cycle for moving between them by retuning one string
+# at a time; each tuning is a chain of fifths and fourths. Notes on strings
+# 1-7 follow Kilmer's reading (strings rising), as tabled by Crickmore,
+# "New light on the Babylonian tonal system" (2008). Each step of the cycle
+# raises one note a semitone (F->F#, C->C#, G->G#, ...), matching the texts'
+# one-string retuning. Today's mode names are given for orientation.
+#
+# West (1994) reads the strings as falling. That gives the same seven
+# patterns under different names: on his reading isartum is the major
+# pattern rather than the Phrygian one. The names here follow Kilmer.
+BABYLONIAN_TUNINGS = {
+    "isartum":    "E F G A B C D",           # Phrygian
+    "kitmum":     "E F# G A B C D",          # Aeolian (natural minor)
+    "embubum":    "E F# G A B C# D",         # Dorian
+    "pitum":      "E F# G# A B C# D",        # Mixolydian
+    "nid_qablim": "E F# G# A B C# D#",       # Ionian (major); same as "babylonian"
+    "nis_gabari": "E F# G# A# B C# D#",      # Lydian
+    "qablitum":   "E# F# G# A# B C# D#",     # Locrian
+}
+
+# Position of each note on the chain of fifths, C = 0.
+_FIFTHS = {"F": -1, "C": 0, "G": 1, "D": 2, "A": 3, "E": 4, "B": 5,
+           "F#": 6, "C#": 7, "G#": 8, "D#": 9, "A#": 10, "E#": 11}
+
+
+def _chain_of_fifths(notes):
+    """Ratios from the first note, built from pure 3:2 fifths and folded
+    into one octave: the way the tablets' tunings are built."""
+    first = _FIFTHS[notes[0]]
+    out = []
+    for n in notes:
+        r = 1.5 ** (_FIFTHS[n] - first)
+        while r >= 2.0:
+            r /= 2.0
+        while r < 1.0:
+            r *= 2.0
+        out.append(r)
+    return sorted(out)
+
+
+for _name, _notes in BABYLONIAN_TUNINGS.items():
+    RATIO_SCALES[_name] = _chain_of_fifths(_notes.split())
+
 NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
 

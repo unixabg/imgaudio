@@ -376,6 +376,28 @@ the sidecar, so files encoded either way are interchangeable as audio. The
 sidecar records whether `--auto-prep` inverted the frame, so decode flips the
 recovered luminance back to match the chroma's orientation.
 
+### Octave light: one palette for every sound
+
+A recording from anywhere else has no sidecar, so there is no colour to
+recover. `--palette octave` gives decode a palette that depends on nothing but
+pitch, shared by every sound:
+
+```
+python3 imgaudio.py --palette octave decode recording.wav look.png
+```
+
+Visible light spans almost exactly one octave, deep red near 400 THz to violet
+near 790 THz. Each row's pitch is raised by whole octaves until it lands in
+that octave of light, and takes its place in rainbow order. A note has the same
+colour in every octave and in every recording; brightness is still loudness.
+The twelve notes are spaced evenly around the colour wheel rather than at their
+true wavelength colours, which would put F#, G and G# in one red.
+
+A sidecar still wins when `--color` finds one. The palette only means pitch
+while rows are pitches, so it suits `raw`, `edges` and `fractal`; `spectral`
+and `phyllotaxis` rearrange the picture. Encode reads brightness, so re-encode
+the grey picture rather than the coloured one.
+
 ## Tuning systems
 
 `notate.py --base` selects how detected pitches are snapped.
@@ -544,6 +566,7 @@ Baseline for comparison: raw drone, base 10, `minor_pent`, defaults → 0.470.
 | `--gamma` | 1.7 | contrast; higher = starker |
 | `--color` | off | write/read a chroma sidecar so decode returns colour |
 | `--color-width` | 32 | chroma sidecar width; 8–32 all look reasonable |
+| `--palette` | grey | decode only: `octave` colours each pitch, shared by every sound |
 | `--lossless` | off | byte-exact archive; audio is harsh noise |
 | `--no-normalize` | off | needed for clean diffs |
 | `--lens` / `--lens-params` | raw | apply a lens |

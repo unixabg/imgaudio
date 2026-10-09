@@ -88,6 +88,9 @@ input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; poin
 .pane { display: grid; gap: 14px; }
 .wave { position: relative; border-radius: 6px; overflow: hidden; background: var(--bg); aspect-ratio: 3 / 1; max-width: 100%; display: grid; place-items: center; color: var(--muted); font-size: 14px; }
 .wave canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.key { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 2px; font: 600 10px/1 var(--mono); color: var(--muted); text-align: center; }
+.key span { display: grid; gap: 3px; }
+.key i { display: block; height: 10px; border-radius: 2px; }
 .preview { border-radius: 6px; overflow: hidden; background: var(--bg); aspect-ratio: 3 / 2; display: grid; place-items: center; color: var(--muted); font-size: 14px; }
 .preview img { width: 100%; height: 100%; object-fit: cover; }
 
@@ -183,6 +186,14 @@ footer .build .nb, footer .build a { white-space: nowrap; }
         <select id="lens"><option value="raw">raw</option></select>
         <span class="desc" id="lens-desc">plain brightness, the honest spectrogram</span>
       </div>
+      <div class="field wide">
+        <label for="palette">Picture colours</label>
+        <select id="palette">
+          <option value="octave" selected>Octave light (colour by pitch)</option>
+          <option value="grey">Grey</option>
+        </select>
+        <span class="desc" id="palette-desc">Each pitch is raised by octaves into visible light and takes that colour, so every sound shares one palette and a note looks the same in every octave. Brightness is loudness.</span>
+      </div>
       <div class="field wide" id="low-field" hidden>
         <label class="check"><input type="checkbox" id="low"> Low-pitched sound</label>
         <span class="desc">Reads 40 to 4000 Hz instead of 80 to 8000 Hz. Tick it if everything sits at the bottom of the picture.</span>
@@ -266,6 +277,7 @@ footer .build .nb, footer .build a { white-space: nowrap; }
     <div class="out">
       <span class="label" id="l-picture">The picture, read back out of that sound</span>
       <img class="picture" id="picture" alt="Image decoded from the sound">
+      <div class="key" id="key-picture" hidden aria-label="Colour of each note"></div>
       <p class="hint" id="picture-hint" hidden>Low pitches at the bottom, high at the top, time from left to right. If everything sits at the bottom, tick Low-pitched sound and run it again. If it's a flat grey field, try Quick detail.</p>
     </div>
     <div class="out" id="resound-block" hidden>
@@ -286,6 +298,7 @@ footer .build .nb, footer .build a { white-space: nowrap; }
     <div class="out">
       <span class="label">The picture, read back out of the music</span>
       <img class="picture" id="melody-picture" alt="Image decoded from the music">
+      <div class="key" id="key-melody" hidden aria-label="Colour of each note"></div>
       <p class="hint" id="melody-hint">The music is made of new notes, so this mostly shows the notes. Raise "Picture under the music" in More settings to bring the photo back. Shown in grey because colour would be painted on, not recovered.</p>
     </div>
     <div class="out">
@@ -311,6 +324,7 @@ const $ = (id) => document.getElementById(id);
 const MAX_SIDE = 1024;
 let photo = null;       // ArrayBuffer of a downscaled JPEG
 let sound = null;       // AudioBuffer of the chosen recording, full length
+let shown = null;       // picture URLs of the last run, grey and octave versions
 let mode = "photo";     // what the run starts from: "photo" or "sound"
 const SR = 22050;       // imgaudio's default sample rate
 let ready = false, busy = false, catalog = null, started = 0;
@@ -347,6 +361,7 @@ function setMode(m) {
   if (ready && !busy) status(readyText(), "ready");
   refresh();
   if (m === "sound") drawWave();
+  applyPalette();
 }
 $("mode-photo").onclick = () => setMode("photo");
 $("mode-sound").onclick = () => setMode("sound");
@@ -406,8 +421,31 @@ worker.onmessage = ({ data }) => {
 function fillCatalog() {
   $("lens").innerHTML = "";
   for (const l of catalog.lenses) $("lens").add(new Option(l.name, l.name));
+  for (const id of ["key-picture", "key-melody"]) {
+    $(id).replaceChildren(...catalog.octave_legend.map(({ note, rgb }) => {
+      const sp = document.createElement("span"), sw = document.createElement("i");
+      sw.style.background = rgb; sp.append(sw, note); return sp;
+    }));
+  }
   fillScales(); lensDesc();
 }
+
+// Swap between grey and octave-light pictures without running again.
+function applyPalette() {
+  const octave = $("palette").value === "octave";
+  const pitchLens = !catalog || catalog.pitch_lenses.includes($("lens").value);
+  $("palette-desc").textContent = octave && !pitchLens && mode === "sound"
+    ? `The ${$("lens").value} lens rearranges the picture, so its rows are no longer pitches. The sound's picture stays grey; the music picture is still coloured by pitch.`
+    : "Each pitch is raised by octaves into visible light and takes that colour, so every sound shares one palette and a note looks the same in every octave. Brightness is loudness.";
+  if (!shown) return;
+  const pic = octave && shown.pictureOctave;
+  $("picture").src = pic ? shown.pictureOctave : shown.picture;
+  $("key-picture").hidden = !pic;
+  $("melody-picture").src = octave ? shown.melodyOctave : shown.melody;
+  $("key-melody").hidden = !octave;
+  setMelodyHint();
+}
+$("palette").onchange = applyPalette;
 function fillScales() {
   if (!catalog) return;
   const base = $("base").value, want = base === "60" ? "babylonian_pent" : "minor_pent";
@@ -419,7 +457,7 @@ function lensDesc() {
   $("lens-desc").textContent = l ? l.desc : "";
 }
 $("base").onchange = fillScales;
-$("lens").onchange = lensDesc;
+$("lens").onchange = () => { lensDesc(); applyPalette(); };
 $("dry").oninput = () => { $("dry-val").textContent = Math.round($("dry").value * 100) + "%"; };
 
 // --- photo: decode, apply rotation, shrink, re-encode as JPEG -------------
@@ -645,6 +683,18 @@ $("make").onclick = async () => {
   }
 };
 
+function setMelodyHint() {
+  if (!shown) return;
+  const fromSound = shown.mode === "sound", mix = shown.mix;
+  const src = fromSound ? "your sound" : "the photo's sound", pic = fromSound ? "its picture" : "the photo";
+  const colours = $("palette").value === "octave"
+    ? (fromSound ? " Colours show each note's pitch." : " Colours show each note's pitch, not the photo's colours.")
+    : (fromSound ? "" : " Shown in grey because the photo's colour would be painted on, not recovered.");
+  $("melody-hint").textContent = (mix > 0
+    ? `${mix}% of ${src} is mixed under the notes, so ${pic} shows through them.`
+    : `The music is made of new notes, so this mostly shows the notes. Raise "Picture under the music" in More settings to bring ${pic} back.`) + colours;
+}
+
 function blobUrl(bytes, type) {
   const u = URL.createObjectURL(new Blob([bytes], { type })); urls.push(u); return u;
 }
@@ -654,8 +704,15 @@ function show(d) {
   $("a-sound").src = sound; $("d-sound").href = sound;
   $("a-melody").src = melody; $("d-melody").href = melody;
   $("d-midi").href = blobUrl(d.midi, "audio/midi");
-  $("picture").src = blobUrl(d.picture, "image/png");
-  $("melody-picture").src = blobUrl(d.melodyPicture, "image/png");
+  shown = {
+    mode: d.mode,
+    picture: blobUrl(d.picture, "image/png"),
+    pictureOctave: d.pictureOctave ? blobUrl(d.pictureOctave, "image/png") : null,
+    melody: blobUrl(d.melodyPicture, "image/png"),
+    melodyOctave: blobUrl(d.melodyPictureOctave, "image/png"),
+    mix: Math.round(Number($("dry").value) * 100),
+  };
+  applyPalette();
   const fromSound = d.mode === "sound";
   $("l-sound").textContent = fromSound ? "Your sound (the part used)" : "The photo as sound";
   $("d-sound").download = fromSound ? "imgaudio-clip.wav" : "imgaudio-sound.wav";
@@ -667,12 +724,7 @@ function show(d) {
     $("a-resound").src = re; $("d-resound").href = re;
   }
   $("l-fidelity").textContent = fromSound ? "How much of your sound survived in the music" : "How much of the photo survived in the music";
-  const mix = Math.round(Number($("dry").value) * 100);
-  const src = fromSound ? "your sound" : "the photo's sound", pic = fromSound ? "its picture" : "the photo";
-  const grey = fromSound ? "" : " Shown in grey because colour would be painted on, not recovered.";
-  $("melody-hint").textContent = (mix > 0
-    ? `${mix}% of ${src} is mixed under the notes, so ${pic} shows through them.`
-    : `The music is made of new notes, so this mostly shows the notes. Raise "Picture under the music" in More settings to bring ${pic} back.`) + grey;
+  setMelodyHint();
   const fid = /spectral fidelity\s+([\d.]+)/.exec(d.log);
   $("fidelity").textContent = fid ? fid[1] : "–";
   $("log").textContent = d.log.trim().replace(/\/work\//g, "");

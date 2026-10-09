@@ -47,7 +47,8 @@ onmessage = async ({ data }) => {
   if (data.type !== "make") return;
   try {
     for (const f of ["photo.jpg", "input.wav", "sound.wav", "sound.chroma.png", "picture.png",
-                     "resound.wav", "melody.wav", "melody.mid", "melody.png"]) {
+                     "resound.wav", "melody.wav", "melody.mid", "melody.png",
+                     "picture-octave.png", "melody-octave.png"]) {
       try { py.FS.unlink("/work/" + f); } catch {}
     }
     const fromSound = data.mode === "sound";
@@ -62,6 +63,8 @@ onmessage = async ({ data }) => {
       melody: read("/work/melody.wav"),
       midi: read("/work/melody.mid"),
       melodyPicture: read("/work/melody.png"),
+      pictureOctave: fromSound ? read("/work/picture-octave.png") : null,
+      melodyPictureOctave: read("/work/melody-octave.png"),
     };
     postMessage({ type: "done", mode: data.mode, log, ...out },
       Object.values(out).filter(Boolean).map((a) => a.buffer));

@@ -11,6 +11,7 @@ import json
 import sys
 
 import numpy as np
+from PIL import Image
 from scipy.signal import _spectral_py
 
 import imgaudio
@@ -45,15 +46,35 @@ def _fft_helper_wasm(x, win, detrend_func, nperseg, noverlap, nfft, sides):
 _spectral_py._fft_helper = _fft_helper_wasm
 
 
+# Lenses that keep each picture row at its own pitch, so colouring rows by
+# pitch still means something. spectral and phyllotaxis rearrange the picture.
+PITCH_LENSES = {"raw", "edges", "fractal"}
+
+
 def catalog():
-    """Lenses and scales the page can offer, read from the scripts themselves."""
+    """Lenses, scales and palette legend, read from the scripts themselves."""
     lenses = [{"name": "raw", "desc": "plain brightness, the honest spectrogram"}]
     for name, mod in sorted(imgaudio._LENSES.items()):
         lenses.append({"name": name, "desc": getattr(mod, "DESCRIPTION", "")})
+    names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+    rgb = imgaudio.octave_rgb(261.6256 * 2.0 ** (np.arange(12) / 12))
+    legend = [{"note": n, "rgb": "#%02x%02x%02x" % tuple(int(round(c * 255)) for c in col)}
+              for n, col in zip(names, rgb)]
     return json.dumps({
         "lenses": lenses,
+        "pitch_lenses": sorted(PITCH_LENSES),
+        "octave_legend": legend,
         "scales": {"10": list(notate.SCALES), "60": list(notate.RATIO_SCALES)},
     })
+
+
+def _octave(src, dst, band):
+    """Save a pitch-coloured copy of a grey decoded picture (imgaudio's
+    octave light palette). The grey original stays for re-encoding."""
+    f_lo = float(band[1]) if band else imgaudio.DEFAULTS["f_lo"]
+    f_hi = float(band[3]) if band else imgaudio.DEFAULTS["f_hi"]
+    grey = np.asarray(Image.open(src).convert("L"))
+    Image.fromarray(imgaudio.apply_octave(grey, f_lo, f_hi), "RGB").save(dst)
 
 
 def _run(fn, argv):
@@ -99,6 +120,7 @@ def _music(o, src, grid, band=()):
     log += _run(imgaudio.main,
                 [*grid, *band, "--sr", "44100", "decode",
                  f"{WORK}/melody.wav", f"{WORK}/melody.png"])
+    _octave(f"{WORK}/melody.png", f"{WORK}/melody-octave.png", band)
     return log
 
 
@@ -130,6 +152,8 @@ def make_from_sound(opts_json):
     log = _run(imgaudio.main,
                [*grid, *band, "--lens", o["lens"], "--lens-params", lens_params,
                 "decode", f"{WORK}/input.wav", f"{WORK}/picture.png"])
+    if o["lens"] in PITCH_LENSES:
+        _octave(f"{WORK}/picture.png", f"{WORK}/picture-octave.png", band)
     # Play the picture back as sound. No --auto-prep: a decoded picture is
     # already a spectrogram, so it must not be clipped or inverted like a photo.
     log += _run(imgaudio.main,

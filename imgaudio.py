@@ -196,6 +196,46 @@ def apply_chroma(gray_arr, sidecar_path):
 
 
 # ---------------------------------------------------------------------------
+# Octave light — one shared palette for every sound
+# ---------------------------------------------------------------------------
+# Visible light spans almost exactly one octave: deep red near 400 THz to
+# violet near 790 THz. Raising any pitch by whole octaves lands it somewhere
+# in that octave of light, so every pitch gets a colour that depends on
+# nothing but the pitch, and the same note has the same colour in every
+# octave and in every recording. Brightness stays loudness.
+#
+# The anchor is physical (deep red where light's octave begins), but the
+# twelve notes are spaced evenly around the colour wheel in rainbow order.
+# Pure wavelength colours would put F#, G and G# in one indistinguishable red.
+
+OCTAVE_LIGHT_START = 400e12   # Hz, deep red
+
+
+def octave_rgb(freq_hz):
+    """RGB in [0, 1] for each frequency: red -> yellow -> green -> blue ->
+    violet as the pitch rises through an octave, repeating every octave."""
+    freq_hz = np.asarray(freq_hz, dtype=np.float64)
+    light = freq_hz * 2.0 ** np.ceil(np.log2(OCTAVE_LIGHT_START / freq_hz))
+    p = np.log2(light / OCTAVE_LIGHT_START) % 1.0      # position in the octave
+    h = p * 5.0                                          # hue 0-300 deg, in sixths
+    x = 1.0 - np.abs(h % 2.0 - 1.0)
+    one, zero = np.ones_like(h), np.zeros_like(h)
+    seg = np.floor(h).astype(int) % 6
+    r = np.choose(seg, [one, x, zero, zero, x, one])
+    g = np.choose(seg, [x, one, one, x, zero, zero])
+    b = np.choose(seg, [zero, zero, x, one, one, x])
+    return np.stack([r, g, b], axis=-1)
+
+
+def apply_octave(gray_arr, f_lo, f_hi):
+    """Colour a decoded grayscale picture by pitch. Row 0 is the highest
+    frequency, matching decode's image orientation."""
+    rows = gray_arr.shape[0]
+    rgb = octave_rgb(np.geomspace(f_lo, f_hi, rows)[::-1])[:, None, :]
+    return (rgb * gray_arr[..., None]).round().astype(np.uint8)
+
+
+# ---------------------------------------------------------------------------
 # Encoder
 # ---------------------------------------------------------------------------
 def encode(image_path, audio_path, *, sr, rows, cols, f_lo, f_hi, col_sec,
@@ -292,7 +332,8 @@ def encode(image_path, audio_path, *, sr, rows, cols, f_lo, f_hi, col_sec,
 # Decoder
 # ---------------------------------------------------------------------------
 def decode(audio_path, image_path, *, sr, rows, cols, f_lo, f_hi,
-           lossless=False, color=False, lens="raw", lens_params=None, **_):
+           lossless=False, color=False, lens="raw", lens_params=None,
+           palette="grey", **_):
     """Recover the image from the audio via STFT magnitude, or raw-byte decode."""
     if lossless:
         # Raw byte mode: WAV samples ARE the image bytes. Strip header, write file.
@@ -370,6 +411,12 @@ def decode(audio_path, image_path, *, sr, rows, cols, f_lo, f_hi,
         Image.fromarray(rgb, "RGB").save(image_path)
         print(f"decoded: {image_path}  ({cols}×{rows}, recoloured from "
               f"{sidecar.name})")
+    elif palette == "octave":
+        if color:
+            print(f"  no chroma sidecar at {sidecar} — using octave light",
+                  file=sys.stderr)
+        Image.fromarray(apply_octave(img_arr, f_lo, f_hi), "RGB").save(image_path)
+        print(f"decoded: {image_path}  ({cols}×{rows}, octave light palette)")
     else:
         if color:
             print(f"  no chroma sidecar at {sidecar} — writing grayscale",
@@ -504,6 +551,11 @@ def build_parser():
     p.add_argument("--color-width", type=int, default=32,
                    help="chroma sidecar width in pixels; height follows the "
                         "source aspect. 32 is near-lossless to the eye")
+    p.add_argument("--palette", choices=["grey", "octave"], default="grey",
+                   help="decode only: 'octave' colours each pitch by raising "
+                        "it by octaves into visible light, so every sound "
+                        "shares one palette. A --color sidecar takes priority. "
+                        "Encode reads brightness, so re-encode the grey picture")
     p.add_argument("--lens", default="raw", help=lens_help)
     p.add_argument("--lens-params", default="",
                    help="Comma-separated key=value pairs passed to the lens, "
@@ -535,7 +587,8 @@ def main(argv=None):
               auto_prep=args.auto_prep, no_normalize=args.no_normalize,
               lossless=args.lossless,
               lens=args.lens, lens_params=_parse_lens_params(args.lens_params),
-              color=args.color, color_width=args.color_width)
+              color=args.color, color_width=args.color_width,
+              palette=args.palette)
 
     if args.cmd == "encode":
         encode(args.image, args.audio, **kw)

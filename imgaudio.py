@@ -196,6 +196,21 @@ def apply_chroma(gray_arr, sidecar_path):
 
 
 # ---------------------------------------------------------------------------
+# Frequency grid — which pitch each image row stands for
+# ---------------------------------------------------------------------------
+# Encode, decode and the palette must agree on this, or pictures come back
+# stretched. "log" (the default) gives every octave the same height, the way
+# we hear pitch. "linear" gives every Hz the same height, the way most
+# spectrogram tools draw, so it suits images drawn with those tools.
+
+def freq_grid(f_lo, f_hi, rows, scale="log"):
+    """Frequency of each row, lowest first."""
+    if scale == "linear":
+        return np.linspace(f_lo, f_hi, rows)
+    return np.geomspace(f_lo, f_hi, rows)
+
+
+# ---------------------------------------------------------------------------
 # Octave light — one shared palette for every sound
 # ---------------------------------------------------------------------------
 # Visible light spans almost exactly one octave: deep red near 400 THz to
@@ -227,11 +242,11 @@ def octave_rgb(freq_hz):
     return np.stack([r, g, b], axis=-1)
 
 
-def apply_octave(gray_arr, f_lo, f_hi):
+def apply_octave(gray_arr, f_lo, f_hi, scale="log"):
     """Colour a decoded grayscale picture by pitch. Row 0 is the highest
     frequency, matching decode's image orientation."""
     rows = gray_arr.shape[0]
-    rgb = octave_rgb(np.geomspace(f_lo, f_hi, rows)[::-1])[:, None, :]
+    rgb = octave_rgb(freq_grid(f_lo, f_hi, rows, scale)[::-1])[:, None, :]
     return (rgb * gray_arr[..., None]).round().astype(np.uint8)
 
 
@@ -241,7 +256,7 @@ def apply_octave(gray_arr, f_lo, f_hi):
 def encode(image_path, audio_path, *, sr, rows, cols, f_lo, f_hi, col_sec,
            gamma, threshold, auto_prep=False, no_normalize=False,
            lossless=False, lens="raw", lens_params=None,
-           color=False, color_width=32, **_):
+           color=False, color_width=32, freq_scale="log", **_):
     """Synthesize audio whose spectrogram is the image, or raw-byte encode."""
     if lossless:
         # Raw byte mode: wrap the image file's bytes as 8-bit unsigned PCM.
@@ -281,7 +296,10 @@ def encode(image_path, audio_path, *, sr, rows, cols, f_lo, f_hi, col_sec,
 
     grid = grid ** gamma                  # gamma curve for cleaner read-back
 
-    freqs = np.geomspace(f_lo, f_hi, rows)
+    if f_hi >= sr / 2:
+        raise SystemExit(f"--f-hi {f_hi:.0f} Hz needs a sample rate above "
+                         f"{2 * f_hi:.0f} Hz; try --sr 44100")
+    freqs = freq_grid(f_lo, f_hi, rows, freq_scale)
     samples_per_col = int(col_sec * sr)
     frame_len = samples_per_col * 2       # overlap-add: frames overlap 50%
     hop = samples_per_col
@@ -326,14 +344,14 @@ def encode(image_path, audio_path, *, sr, rows, cols, f_lo, f_hi, col_sec,
 
     wavfile.write(audio_path, sr, (out * 32767).astype(np.int16))
     print(f"encoded: {audio_path}  ({len(out)/sr:.2f}s, "
-          f"{rows} bins × {cols} steps, {f_lo:.0f}–{f_hi:.0f} Hz log)")
+          f"{rows} bins × {cols} steps, {f_lo:.0f}–{f_hi:.0f} Hz {freq_scale})")
 
 # ---------------------------------------------------------------------------
 # Decoder
 # ---------------------------------------------------------------------------
 def decode(audio_path, image_path, *, sr, rows, cols, f_lo, f_hi,
            lossless=False, color=False, lens="raw", lens_params=None,
-           palette="grey", **_):
+           palette="grey", freq_scale="log", **_):
     """Recover the image from the audio via STFT magnitude, or raw-byte decode."""
     if lossless:
         # Raw byte mode: WAV samples ARE the image bytes. Strip header, write file.
@@ -369,7 +387,7 @@ def decode(audio_path, image_path, *, sr, rows, cols, f_lo, f_hi,
     mag = np.abs(Z)
 
     # Resample STFT (linear freq) onto the encoder's log-frequency grid
-    target_freqs = np.geomspace(f_lo, f_hi, rows)
+    target_freqs = freq_grid(f_lo, f_hi, rows, freq_scale)
     img_arr = np.zeros((rows, mag.shape[1]), dtype=np.float32)
     for i, tf in enumerate(target_freqs):
         idx = int(np.argmin(np.abs(f - tf)))
@@ -415,7 +433,7 @@ def decode(audio_path, image_path, *, sr, rows, cols, f_lo, f_hi,
         if color:
             print(f"  no chroma sidecar at {sidecar} — using octave light",
                   file=sys.stderr)
-        Image.fromarray(apply_octave(img_arr, f_lo, f_hi), "RGB").save(image_path)
+        Image.fromarray(apply_octave(img_arr, f_lo, f_hi, freq_scale), "RGB").save(image_path)
         print(f"decoded: {image_path}  ({cols}×{rows}, octave light palette)")
     else:
         if color:
@@ -551,6 +569,11 @@ def build_parser():
     p.add_argument("--color-width", type=int, default=32,
                    help="chroma sidecar width in pixels; height follows the "
                         "source aspect. 32 is near-lossless to the eye")
+    p.add_argument("--freq-scale", choices=["log", "linear"], default="log",
+                   help="how rows map to pitch: log gives every octave the same "
+                        "height (how we hear); linear gives every Hz the same "
+                        "height (how most spectrogram tools draw). Encode and "
+                        "decode must use the same scale")
     p.add_argument("--palette", choices=["grey", "octave"], default="grey",
                    help="decode only: 'octave' colours each pitch by raising "
                         "it by octaves into visible light, so every sound "
@@ -588,7 +611,7 @@ def main(argv=None):
               lossless=args.lossless,
               lens=args.lens, lens_params=_parse_lens_params(args.lens_params),
               color=args.color, color_width=args.color_width,
-              palette=args.palette)
+              palette=args.palette, freq_scale=args.freq_scale)
 
     if args.cmd == "encode":
         encode(args.image, args.audio, **kw)

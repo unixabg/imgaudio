@@ -68,13 +68,33 @@ def catalog():
     })
 
 
+# Which part of the sound a run reads. The page clips recordings to the
+# sample rate given here, so "full" keeps 44.1 kHz for detail up to 20 kHz.
+RANGES = {
+    "standard": dict(f_lo=80, f_hi=8000, sr=22050),
+    "low":      dict(f_lo=40, f_hi=4000, sr=22050),   # README: squashed at the bottom
+    "full":     dict(f_lo=40, f_hi=20000, sr=44100),  # hidden images often sit up high
+}
+
+
+def _band(o):
+    """Frequency range and scale for a run, as a dict plus imgaudio flags."""
+    b = dict(RANGES.get(o.get("range", "standard"), RANGES["standard"]))
+    b["scale"] = "linear" if o.get("fscale") == "linear" else "log"
+    b["args"] = ["--f-lo", str(b["f_lo"]), "--f-hi", str(b["f_hi"]),
+                 "--freq-scale", b["scale"]]
+    return b
+
+
+PHOTO_BAND = dict(f_lo=80, f_hi=8000, sr=22050, scale="log", args=[])
+
+
 def _octave(src, dst, band):
     """Save a pitch-coloured copy of a grey decoded picture (imgaudio's
     octave light palette). The grey original stays for re-encoding."""
-    f_lo = float(band[1]) if band else imgaudio.DEFAULTS["f_lo"]
-    f_hi = float(band[3]) if band else imgaudio.DEFAULTS["f_hi"]
     grey = np.asarray(Image.open(src).convert("L"))
-    Image.fromarray(imgaudio.apply_octave(grey, f_lo, f_hi), "RGB").save(dst)
+    rgb = imgaudio.apply_octave(grey, band["f_lo"], band["f_hi"], band["scale"])
+    Image.fromarray(rgb, "RGB").save(dst)
 
 
 def _run(fn, argv):
@@ -104,7 +124,7 @@ def _grid(o):
     return ["--rows", str(rows), "--cols", str(cols)], lens_params
 
 
-def _music(o, src, grid, band=()):
+def _music(o, src, grid, band=PHOTO_BAND):
     """src -> melody.wav + .mid (with --verify), then melody.wav -> melody.png."""
     log = _run(_notate_main,
                ["notes", src, f"{WORK}/melody.wav",
@@ -112,13 +132,14 @@ def _music(o, src, grid, band=()):
                 "--base", str(o["base"]), "--scale", o["scale"], "--root", o["root"],
                 "--bpm", str(o["bpm"]), "--grid", str(o["grid"]),
                 "--voices", str(o["voices"]), "--program", str(o["program"]),
-                "--dry-mix", str(o["dry_mix"]), *band[:2], "--verify"])
+                "--dry-mix", str(o["dry_mix"]), "--f-lo", str(min(80, band["f_lo"])),
+                "--verify"])
 
     # Read a picture back out of the music too. Greyscale on purpose: the
     # colour sidecar would paint the photo onto whatever gets decoded, even
     # notes that carry none of it. Only --dry-mix brings the source back.
     log += _run(imgaudio.main,
-                [*grid, *band, "--sr", "44100", "decode",
+                [*grid, *band["args"], "--sr", "44100", "decode",
                  f"{WORK}/melody.wav", f"{WORK}/melody.png"])
     _octave(f"{WORK}/melody.png", f"{WORK}/melody-octave.png", band)
     return log
@@ -145,17 +166,16 @@ def make_from_sound(opts_json):
     then the music from the recording itself."""
     o = json.loads(opts_json)
     grid, lens_params = _grid(o)
-    # README: content squashed at the bottom means the sound sits below the
-    # default 80-8000 Hz band; 40-4000 Hz reads low-pitched recordings.
-    band = ["--f-lo", "40", "--f-hi", "4000"] if o.get("low") else []
+    band = _band(o)
+    sr = ["--sr", str(band["sr"])]
 
     log = _run(imgaudio.main,
-               [*grid, *band, "--lens", o["lens"], "--lens-params", lens_params,
+               [*grid, *band["args"], *sr, "--lens", o["lens"], "--lens-params", lens_params,
                 "decode", f"{WORK}/input.wav", f"{WORK}/picture.png"])
     if o["lens"] in PITCH_LENSES:
         _octave(f"{WORK}/picture.png", f"{WORK}/picture-octave.png", band)
     # Play the picture back as sound. No --auto-prep: a decoded picture is
     # already a spectrogram, so it must not be clipped or inverted like a photo.
     log += _run(imgaudio.main,
-                [*grid, *band, "encode", f"{WORK}/picture.png", f"{WORK}/resound.wav"])
+                [*grid, *band["args"], *sr, "encode", f"{WORK}/picture.png", f"{WORK}/resound.wav"])
     return log + _music(o, f"{WORK}/input.wav", grid, band)

@@ -194,10 +194,22 @@ footer .build .nb, footer .build a { white-space: nowrap; }
         </select>
         <span class="desc" id="palette-desc">Each pitch is raised by octaves into visible light and takes that colour, so every sound shares one palette and a note looks the same in every octave. Brightness is loudness.</span>
       </div>
-      <div class="field wide" id="low-field" hidden>
-        <label class="check"><input type="checkbox" id="low"> Low-pitched sound</label>
-        <span class="desc">Reads 40 to 4000 Hz instead of 80 to 8000 Hz. Tick it if everything sits at the bottom of the picture.</span>
+      <div class="field" data-sound hidden>
+        <label for="range">Frequency range</label>
+        <select id="range">
+          <option value="standard" selected>Standard (80 Hz–8 kHz)</option>
+          <option value="low">Low (40 Hz–4 kHz)</option>
+          <option value="full">Full (40 Hz–20 kHz)</option>
+        </select>
       </div>
+      <div class="field" data-sound hidden>
+        <label for="fscale">Frequency scale</label>
+        <select id="fscale">
+          <option value="log" selected>Log (musical)</option>
+          <option value="linear">Linear</option>
+        </select>
+      </div>
+      <p class="desc field wide" data-sound hidden>Hidden pictures often sit above 8 kHz: try Full. Most spectrogram tools draw on a Linear scale, so if a picture looks squashed toward the top, switch to Linear. Use Low if everything sits at the bottom.</p>
       <div class="field">
         <label for="base">Tuning</label>
         <select id="base">
@@ -278,7 +290,7 @@ footer .build .nb, footer .build a { white-space: nowrap; }
       <span class="label" id="l-picture">The picture, read back out of that sound</span>
       <img class="picture" id="picture" alt="Image decoded from the sound">
       <div class="key" id="key-picture" hidden aria-label="Colour of each note"></div>
-      <p class="hint" id="picture-hint" hidden>Low pitches at the bottom, high at the top, time from left to right. If everything sits at the bottom, tick Low-pitched sound and run it again. If it's a flat grey field, try Quick detail.</p>
+      <p class="hint" id="picture-hint" hidden>Low pitches at the bottom, high at the top, time from left to right. Looking for a hidden picture? Try Full range, then Linear scale. If everything sits at the bottom, use Low. If it's a flat grey field, try Quick detail.</p>
     </div>
     <div class="out" id="resound-block" hidden>
       <span class="label">That picture, played back as sound</span>
@@ -355,7 +367,7 @@ function setMode(m) {
   $("mode-sound").setAttribute("aria-pressed", m === "sound");
   $("photo-pane").hidden = m !== "photo";
   $("sound-pane").hidden = m !== "sound";
-  $("low-field").hidden = m !== "sound";
+  document.querySelectorAll("[data-sound]").forEach((el) => { el.hidden = m !== "sound"; });
   $("color-field").hidden = m !== "photo";   // a recording has no colour to keep
   $("settings-title").textContent = m === "photo" ? "Pick how it sounds" : "Pick how to read it";
   if (ready && !busy) status(readyText(), "ready");
@@ -637,11 +649,11 @@ $("ssample").onclick = () => {
 };
 
 // The chosen part as 16-bit mono WAV at imgaudio's sample rate.
-async function clipWav() {
+async function clipWav(rate = SR) {
   const { start, len } = trimWindow();
-  const frames = Math.max(1, Math.round(len * SR));
+  const frames = Math.max(1, Math.round(len * rate));
   const Off = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-  const off = new Off(1, frames, SR);        // one channel: stereo is mixed down
+  const off = new Off(1, frames, rate);      // one channel: stereo is mixed down
   const src = off.createBufferSource();
   src.buffer = sound; src.connect(off.destination); src.start(0, start, len);
   const out = (await off.startRendering()).getChannelData(0);
@@ -649,7 +661,7 @@ async function clipWav() {
   const str = (o, t) => { for (let i = 0; i < t.length; i++) wav.setUint8(o + i, t.charCodeAt(i)); };
   str(0, "RIFF"); wav.setUint32(4, 36 + out.length * 2, true); str(8, "WAVE");
   str(12, "fmt "); wav.setUint32(16, 16, true); wav.setUint16(20, 1, true); wav.setUint16(22, 1, true);
-  wav.setUint32(24, SR, true); wav.setUint32(28, SR * 2, true); wav.setUint16(32, 2, true); wav.setUint16(34, 16, true);
+  wav.setUint32(24, rate, true); wav.setUint32(28, rate * 2, true); wav.setUint16(32, 2, true); wav.setUint16(34, 16, true);
   str(36, "data"); wav.setUint32(40, out.length * 2, true);
   for (let i = 0; i < out.length; i++) wav.setInt16(44 + i * 2, Math.max(-1, Math.min(1, out[i])) * 32767, true);
   return wav.buffer;
@@ -660,7 +672,8 @@ $("make").onclick = async () => {
   if (!ready || busy || !(mode === "photo" ? photo : sound)) return;
   const [rows, cols] = $("detail").value.split("x").map(Number);
   const opts = {
-    rows, cols, lens: $("lens").value, color: $("color").checked, low: $("low").checked,
+    rows, cols, lens: $("lens").value, color: $("color").checked,
+    range: $("range").value, fscale: $("fscale").value,
     base: Number($("base").value), scale: $("scale").value, root: $("root").value,
     bpm: Number($("bpm").value) || 100, grid: Number($("grid").value),
     voices: Math.max(1, Number($("voices").value) || 3),
@@ -674,7 +687,7 @@ $("make").onclick = async () => {
   }
   try {
     status("Preparing your sound…");
-    const input = await clipWav();
+    const input = await clipWav($("range").value === "full" ? 44100 : SR);
     status("Finding the picture…");
     worker.postMessage({ type: "make", mode, input, opts }, [input]);
   } catch (err) {

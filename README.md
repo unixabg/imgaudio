@@ -70,6 +70,24 @@ the default 80–8000 Hz band, so try `--f-lo 40 --f-hi 4000`; a flat gray field
 means the audio is too self-similar at that resolution, so drop to
 `--rows 200 --cols 400`.
 
+### Hidden pictures
+
+Pictures that people deliberately draw into a sound often sit above the default
+8 kHz ceiling, and most spectrogram tools draw them on a linear frequency axis
+rather than imgaudio's log axis. Read the whole range at the file's own 44.1 kHz,
+then try both scales:
+
+```bash
+python3 imgaudio.py --sr 44100 --f-lo 40 --f-hi 20000 decode clip.wav log.png
+python3 imgaudio.py --sr 44100 --f-lo 40 --f-hi 20000 --freq-scale linear decode clip.wav linear.png
+```
+
+A picture squashed toward the top on the log scale usually comes back in shape on
+the linear one. `--freq-scale` also works on encode, and encode and decode must
+use the same scale. Encode refuses an `--f-hi` at or above half the sample rate,
+since those pitches can't be represented and would fold back down as noise. The
+full range is slower; trim to the part you care about first.
+
 Once you've seen the honest version, the lenses are purely aesthetic — you're
 not undoing anything, just choosing how to render it:
 
@@ -567,6 +585,7 @@ Baseline for comparison: raw drone, base 10, `minor_pent`, defaults → 0.470.
 | `--color` | off | write/read a chroma sidecar so decode returns colour |
 | `--color-width` | 32 | chroma sidecar width; 8–32 all look reasonable |
 | `--palette` | grey | decode only: `octave` colours each pitch, shared by every sound |
+| `--freq-scale` | log | `linear` spaces rows evenly in Hz, as most spectrogram tools draw; encode and decode must match |
 | `--lossless` | off | byte-exact archive; audio is harsh noise |
 | `--no-normalize` | off | needed for clean diffs |
 | `--lens` / `--lens-params` | raw | apply a lens |

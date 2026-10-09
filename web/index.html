@@ -462,7 +462,12 @@ function fillScales() {
   if (!catalog) return;
   const base = $("base").value, want = base === "60" ? "babylonian_pent" : "minor_pent";
   $("scale").innerHTML = "";
-  for (const s of catalog.scales[base]) $("scale").add(new Option(s, s, s === want, s === want));
+  for (const group of catalog.scale_menu[base]) {
+    const og = document.createElement("optgroup");
+    og.label = group.label;
+    for (const s of group.items) og.append(new Option(s.label, s.value, s.value === want, s.value === want));
+    $("scale").append(og);
+  }
 }
 function lensDesc() {
   const l = catalog && catalog.lenses.find((x) => x.name === $("lens").value);

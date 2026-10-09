@@ -51,6 +51,51 @@ _spectral_py._fft_helper = _fft_helper_wasm
 PITCH_LENSES = {"raw", "edges", "fractal", "reveal"}
 
 
+# How the page groups and names notate.py's scales. Presentation only: any
+# scale not listed here still appears, under "Other", so nothing goes missing.
+SCALE_GROUPS = {
+    "10": [
+        ("Pentatonic", [("minor_pent", "Minor pentatonic"), ("major_pent", "Major pentatonic"),
+                        ("hirajoshi", "Hirajōshi (Japanese)"), ("in_sen", "In sen (Japanese)")]),
+        ("Seven-note modes", [("major", "Major"), ("minor", "Minor"), ("dorian", "Dorian"),
+                              ("phrygian", "Phrygian"), ("lydian", "Lydian")]),
+        ("Symmetric", [("whole_tone", "Whole tone"), ("octatonic", "Octatonic"),
+                       ("chromatic", "Chromatic")]),
+    ],
+    "60": [
+        ("Babylonian tablets", [
+            ("babylonian_pent", "Babylonian pentatonic"),
+            ("isartum", "išartum · Phrygian"),
+            ("kitmum", "kitmum · minor"),
+            ("embubum", "embūbum · Dorian"),
+            ("pitum", "pītum · Mixolydian"),
+            ("nid_qablim", "nīd qablim · major (Hymn to Nikkal)"),
+            ("nis_gabari", "nīš gabarî · Lydian"),
+            ("qablitum", "qablītum · Locrian"),
+        ]),
+        ("Just intonation", [("just_major", "Just major"), ("just_minor", "Just minor"),
+                             ("just_pent", "Just pentatonic"),
+                             ("just_minor_pent", "Just minor pentatonic")]),
+        ("Harmonic series", [("harmonic", "Harmonic (partials 8–16)")]),
+    ],
+}
+# Same scale under two names; the page shows only the tablet's name.
+SCALE_ALIASES = {"babylonian": "nid_qablim"}
+
+
+def _scale_menu(base, names):
+    groups, shown = [], set()
+    for label, items in SCALE_GROUPS[base]:
+        kept = [{"value": v, "label": t} for v, t in items if v in names]
+        shown.update(i["value"] for i in kept)
+        if kept:
+            groups.append({"label": label, "items": kept})
+    rest = [n for n in names if n not in shown and n not in SCALE_ALIASES]
+    if rest:
+        groups.append({"label": "Other", "items": [{"value": n, "label": n} for n in rest]})
+    return groups
+
+
 def catalog():
     """Lenses, scales and palette legend, read from the scripts themselves."""
     lenses = [{"name": "raw", "desc": "plain brightness, the honest spectrogram"}]
@@ -65,6 +110,8 @@ def catalog():
         "pitch_lenses": sorted(PITCH_LENSES),
         "octave_legend": legend,
         "scales": {"10": list(notate.SCALES), "60": list(notate.RATIO_SCALES)},
+        "scale_menu": {"10": _scale_menu("10", list(notate.SCALES)),
+                       "60": _scale_menu("60", list(notate.RATIO_SCALES))},
     })
 
 

@@ -628,6 +628,14 @@ peaks near `--voices 37` and declines after — low-amplitude peaks jitter
 between neighbouring bins and merge into fewer, longer notes rather than more
 of them.
 
+**`examples/hidden-word.wav`** and **`examples/hidden-stone.wav`** — test clips
+with pictures hidden the way musicians hide them (see Hidden pictures). The
+word "imgaudio" sits at 10–18 kHz under a melody, out of sight until you read
+the full range; the stone is drawn on a linear frequency scale and only comes
+back in shape on one. Both are 44.1 kHz, so they also work in the web page's
+Sound mode with Frequency range set to Full. `examples/hidden-pictures.py`
+rebuilds them and shows exactly how they were made.
+
 ## Writing a lens
 
 Copy `lenses/_example.py`, rename, implement three things:

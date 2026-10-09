@@ -41,3 +41,6 @@ _site/
 
 # Site icons are source files, not output images.
 !web/icons/*.png
+
+# Example clips are source files, not outputs.
+!examples/*.wav

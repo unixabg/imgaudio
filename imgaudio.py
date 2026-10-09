@@ -339,6 +339,9 @@ def decode(audio_path, image_path, *, sr, rows, cols, f_lo, f_hi,
         img_arr = np.asarray(
             Image.fromarray(img_arr).resize((cols, rows), Image.LANCZOS)
         )
+        # Lanczos overshoots below zero around sharp tones; a magnitude under
+        # -1/50 makes log1p below return NaN and blanks the whole picture.
+        img_arr = np.maximum(img_arr, 0.0)
 
     # Log compression + normalize, then flip back to image orientation
     img_arr = np.log1p(img_arr * 50)

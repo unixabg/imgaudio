@@ -662,6 +662,23 @@ notation lines are included, as transcribed from Laroche, *Ugaritica V* (1968);
 choice, and new lines can be added to its `NOTATION` list. See them with
 `python3 imgaudio.py --palette octave --f-lo 100 --f-hi 1600 decode examples/h6-together.wav h6.png`.
 
+**`examples/seikilos.wav`** — the Seikilos epitaph (1st or 2nd century CE), the
+oldest complete piece of music whose melody and rhythm can both be read. The
+melody comes straight from the letters carved over each syllable, with their
+length marks, played in Pythagorean tuning. With `--base 60 --scale babylonian`
+notate.py hears it back at a fidelity near 0.9, since stacked fifths are the
+song's own tuning. `examples/seikilos.py` gives the sources and the one place it
+follows scholars over the image (the final cadence).
+
+**`examples/enkidu-clay.wav`** and **`examples/enkidu-beasts.wav`** — lines from
+the Epic of Gilgamesh about Enkidu, shaped from clay and living with the beasts,
+in R. Campbell Thompson's public-domain 1928 translation, written into sound.
+Decode them and the words come back:
+`python3 imgaudio.py --rows 300 --cols 600 decode examples/enkidu-clay.wav clay.png`.
+What travels is the shape of the writing, not speech. `examples/enkidu.py`
+keeps the text in the upper two thirds of the picture, because below about
+300 Hz the decoder resolves pitch too coarsely and letters smear.
+
 ## Writing a lens
 
 Copy `lenses/_example.py`, rename, implement three things:

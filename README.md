@@ -1,14 +1,26 @@
 # Year of Frames — image → sound → music
 
-Turns timelapse photographs into audio, then into playable music. Each tool is
-standalone; chain them or stop anywhere.
+Turns pictures into sound, sound back into pictures, and either one into
+playable music. It began with a year of timelapse photographs and grew from
+there: any recording can be read as a picture, pictures hidden in sound can be
+found, motion in a video can be heard, and music from clay tablets and carved
+stone can be played again. Each tool is standalone; chain them or stop anywhere.
 
 ```
-photos ──► spectrogram audio ──► notes / MIDI
-              │
-              ├──► recurrence plots (structure + anomalies)
-              └──► audio diffs (what changed)
+photo ─────┐                          ┌──► picture again (round trip)
+recording ─┼──► spectrogram audio ────┼──► notes / MIDI, any tuning or instrument
+video ─────┘    (motion only)         ├──► recurrence plots (structure + anomalies)
+                                      └──► audio diffs (what changed)
 ```
+
+## Try it in your browser
+
+**[unixabg.github.io/imgaudio](https://unixabg.github.io/imgaudio/)** runs the
+same `imgaudio.py`, `notate.py` and lenses in the browser, on phones too, with
+nothing to install and nothing uploaded. Start from a photo or from any
+recording; choose a lens, a tuning (including the seven Babylonian ones) and an
+instrument; hear the result, see the picture read back out of it, and save the
+WAV and MIDI. See [The web page](#the-web-page) for building and deploying it.
 
 ## Setup
 
@@ -28,29 +40,33 @@ directly: `~/imgaudio/.venv/bin/python3 imgaudio.py ...`
 
 ```
 imgaudio.py              image ↔ audio, with lens support
-notate.py                audio → musical notes + MIDI
-anomaly.py               recurrence plots + anomaly ranking
-flow_prep.py             consecutive frames → motion images
+notate.py                audio → musical notes + MIDI, in any tuning and instrument
 motion.py                video → sound of only what moves
-lenses/                  edges.py, fractal.py, phyllotaxis.py, spectral.py, _example.py
+anomaly.py               recurrence plots + anomaly ranking
+render.py                runs the pipeline from a TOML recipe
+lenses/                  edges, fractal, phyllotaxis, reveal, spectral, _example
+recipes/                 example.toml, recordings.toml, sweep.toml
 imgaudio-batch.sh        encode every frame
 imgaudio-diff-batch.sh   per-frame diffs + change_log.txt
 lens_recursion.sh        feed an image through lenses N times
 knobs.sh                 sweep anomaly.py settings on one file
-examples/                tuning-demo.sh, voice-stack.sh
-frames/  out/  flow/     data (gitignored)
+examples/                demos, test clips, and ancient music (see Examples)
+web/                     the browser version (see The web page)
+VERSION                  release number shown on the web page
+frames/  out/  renders/  data (gitignored)
 ```
 
-## Shortest path — one image to MIDI
+## From a photo
 
 ```bash
 python3 imgaudio.py --auto-prep encode photo.jpg tmp.wav
 python3 notate.py notes tmp.wav melody.wav --midi melody.mid
 ```
 
-~5 seconds. `melody.wav` plays immediately; `melody.mid` opens in a DAW.
+~5 seconds. `melody.wav` plays immediately; `melody.mid` opens in a DAW. Add
+`--voice lyre` or `--voice piano` for another instrument (see Instruments).
 
-## Starting from audio instead
+## From a recording
 
 Any WAV works, whether or not it came from this pipeline.
 
@@ -102,7 +118,7 @@ In a test, a picture mixed 20 dB under noise and mains hum went from r = 0.09 to
 r = 0.33 against the original. `smooth` (default 1) holds shapes together through
 noise; `zmax` (default 6) sets how unusual counts as full brightness.
 
-Once you've seen the honest version, the lenses are purely aesthetic — you're
+Once you've seen the honest version, the other lenses are mostly aesthetic — you're
 not undoing anything, just choosing how to render it:
 
 ```bash
@@ -112,15 +128,16 @@ done
 montage look_*.png -tile 3x -geometry 400x -label '%f' sheet.png
 ```
 
-Output is grayscale unless the audio was encoded with `--color` (see below).
-To colourize arbitrary audio afterwards:
+Output is grayscale unless the audio was encoded with `--color`, or you ask for
+`--palette octave`, which colours every sound by pitch (see Colour). Or colour it
+afterwards with any gradient:
 
 ```bash
 convert look.png -auto-level \
     \( -size 1x256 gradient:'#440154-#fde725' -rotate 90 \) -clut viridis.png
 ```
 
-## Hearing motion in video
+## From a video
 
 `motion.py` subtracts each video frame from the one before it, so everything
 still cancels and only motion is left, then turns that motion into sound. A
@@ -154,196 +171,15 @@ its own band: the crown at 0.8–3.5 kHz, the grass at 80–140 Hz, the bird at
 gust. Notes from `notate.py` can start up to one grid step before or after
 motion, because it snaps onsets to the beat grid.
 
-## Rendering a recipe
+## Lenses
 
-`render.py` runs the whole pipeline from a small TOML recipe, so you don't have
-to remember flags or keep encode and decode settings in step by hand.
-
-```bash
-python3 render.py recipes/example.toml --dry-run    # see the plan first
-python3 render.py recipes/example.toml              # render it
-```
-
-Outputs land in `renders/<recipe name>/`, one set of files per source:
-
-| file | what it is |
-|---|---|
-| `NAME.wav` | the encoded (or converted) audio |
-| `NAME.chroma.png` | colour sidecar, with `color = true` |
-| `NAME.png` | decode — the photo round-trip, or a recording's spectrogram |
-| `NAME.notes.wav` / `.mid` | the transcription |
-| `NAME.notes.png` | decode of the transcription — a picture of the performance |
-| `NAME.verify.json` | fidelity figures for this source |
-| `report.csv` | one row per source, with a summary printed at the end |
-| `recipe.toml` | a copy of the recipe, so the piece ships with how it was made |
-
-Sections you write are stages you get: encode and decode always run; notate
-runs when `[notate]` is present; assembly runs when `[assemble]` is present.
-Any stage can be switched off with `enabled = false`. Recipe keys are the
-tools' own flags with underscores (`--auto-prep` becomes `auto_prep`), and an
-unknown key is an error, so a typo can't silently fall back to a default.
-
-**Resumable and safe to interrupt.** Finished outputs are skipped, and each job
-renders into a private temp folder before moving results into place, so a
-killed run never leaves a half-written file behind.
-
-**Change a setting, rerun, and only what's affected is redone.** Each stage's
-settings are hashed. Change `[notate]` and the encodes are kept; change
-`[encode]` and everything reruns.
-
-### Recordings as sources
-
-Any sound file ffmpeg can read works as a source: WAV, MP3, M4A (phone
-recordings), FLAC, OGG. There's no hidden photo in an ordinary recording, so
-decode shows the sound's own structure.
-
-```toml
-[source]
-audio = "recordings/*"
-
-[decode]
-palette = "magma"
-```
-
-- **The frequency band is detected automatically** from where the recording's
-  energy actually sits, so a birdsong fills the frame instead of occupying a
-  thin strip. Set `[audio] f_lo` and `f_hi` to fix it instead.
-- **Long recordings are split into equal tiles**, 30 seconds by default
-  (`[audio] tile`), named `NAME.t001`, `NAME.t002`, ... and laid out in reading
-  order in `NAME.sheet.png`.
-- **Colour comes from a palette** — `viridis`, `magma`, `inferno`, or a list
-  of hex colours — since there's no photo to take it from.
-
-`recipes/recordings.toml` is a commented starting point. Images and recordings
-can be mixed in one recipe.
-
-### Sweeps — trying many settings at once
-
-`render.py` normally applies one configuration to many sources. A `[sweep]`
-section does the transpose: every combination of the listed values, over the
-same sources, ranked by how much of each source survived transcription.
-
-```toml
-[sweep.encode]
-lens = ["raw", "spectral"]
-
-[sweep.notate]
-base   = [10, 60]
-scale  = ["minor_pent", "harmonic"]
-voices = [3, 7]
-```
-
-```bash
-python3 render.py recipes/sweep.toml --dry-run   # count combinations first
-python3 render.py recipes/sweep.toml
-```
-
-Each combination gets its own folder (`v001`, `v002`, ...) alongside
-`variants.json` recording what each one was, and `sweep.csv` with every row
-from every variant. At the end it prints a ranking:
-
-```
-sweep.csv: 36 rows, 12 variants scored
-  ranked by mean fidelity across sources (n = sources scored per variant)
-  0.591 ±0.024  n=3   v008  lens=raw  base=60  scale=harmonic  voices=7
-  0.579 ±0.015  n=3   v007  lens=raw  base=60  scale=harmonic  voices=3
-  ...
-  best - worst = 0.108; per-source spread within the best variant is ±0.024
-```
-
-That last line is the guard against reading too much into a sweep: if the gap
-between best and worst is smaller than the variation between sources within
-one variant, it says so, and the ranking is noise.
-
-- **Combinations multiply.** Four axes of two values each is sixteen
-  variants; on twelve images that's 192 renders. `--dry-run` counts them, and
-  prints the first few, before you commit.
-- **Encodes are shared.** Variants with identical encode settings share one
-  encode folder, so a photo is encoded once per lens rather than once per
-  combination.
-- **Impossible combinations are skipped** with a note — a base-60 scale name
-  paired with base 10, for instance. Scale names are read from `notate.py`
-  itself, so adding one there needs no change here.
-- **Sweeps don't assemble.** One joined file per variant is rarely what you
-  want; `[assemble]` is ignored.
-- **Unscored axes still work.** Sweeping only `lens` or `palette` with no
-  `[notate]` section produces a gallery of variant folders and says there was
-  nothing to rank.
-
-`recipes/sweep.toml` is a commented starting point.
-
-### Across a fleet
-
-With the output folder on shared storage:
-
-```bash
-python3 render.py recipes/year.toml --prepare        # once, from one machine
-python3 render.py recipes/year.toml --shard 3/40     # on each worker
-python3 render.py recipes/year.toml                  # once more, to assemble
-```
-
-`--prepare` clears stale outputs and analyzes every recording once, so workers
-don't each repeat it. Workers take interleaved slices, so each gets a spread
-across the whole timeline. A worker refuses to start if the recipe changed
-since the last `--prepare`, rather than deleting files other workers may be
-using.
-
-### render.py gotchas
-
-- Colour only lines up with lenses that keep things where they were: `raw`,
-  `edges`, `fractal`. With `spectral` or `phyllotaxis` the decode has a
-  different layout from the photo, so the colour tints rather than recovers.
-  `render.py` warns when you combine them.
-- Each tile of a recording is brightness-normalized on its own, so loudness
-  differences between tiles don't show in the contact sheet.
-- A dark frame or silent tile has nothing to transcribe. It becomes silence
-  of the right length rather than a failure, so the assembled timeline keeps
-  its shape.
-- Assembling `from = "source"` with both images and recordings needs matching
-  sample rates: set `[audio] sr` to match `[encode] sr` (both default to
-  22050).
-- A hard kill (power loss, `kill -9`) can leave a stray folder in `.tmp/`.
-  It's harmless, and `--prepare` sweeps it up.
-
-
-## Full workflow
-
-**1. Collect frames.** Name them so alphabetical = chronological:
-`frames/image-YYYYMMDD-HHMMSS.jpg`. Every batch script relies on this.
-
-Start hourly (8,760 frames/year, ~3 days encode) rather than per-minute
-(525,600 frames, months). Re-run finer later if it's worth it.
-
-**2. Check settings on one frame.**
-
-```bash
-python3 imgaudio.py --auto-prep roundtrip frames/first.jpg --out-dir check/
-```
-
-Open `check/first_roundtrip.png`. Middle panel should resemble the top panel.
-
-`--auto-prep` is not optional for outdoor photos — it percentile-clips each
-frame and inverts if still mostly bright. Without it, blown-out midday frames
-encode as a constant chord.
-
-**3. Batch encode.**
-
-```bash
-./imgaudio-batch.sh
-```
-
-Resumable — skips frames already done. Parallelize:
-
-```bash
-ls frames/*.jpg | parallel -j $(nproc) --bar \
-  'test -f out/{/.}.wav || python3 imgaudio.py --auto-prep --rows 300 --cols 600 encode {} out/{/.}.wav'
-```
-
-**4. Optional — lenses.** Sonify hidden structure instead of raw brightness.
+A lens reshapes the picture before it becomes sound, or the spectrogram after it
+comes back, to surface structure that raw brightness hides.
 
 ```bash
 python3 imgaudio.py --help                       # lists installed lenses
 python3 imgaudio.py --auto-prep --lens fractal encode img.jpg out.wav
+python3 imgaudio.py --lens reveal decode recording.wav look.png
 ```
 
 | lens | surfaces |
@@ -370,50 +206,6 @@ naturally square and a 200×400 grid stretches it.
 
 Lenses also work on `decode`, transforming an audio's spectrogram into abstract
 art. Look for `lens: <name>` in the output — if it's missing, it didn't fire.
-
-**5. Optional — motion.**
-
-```bash
-python3 flow_prep.py batch frames/ flow/
-python3 imgaudio.py --auto-prep encode flow/flow_x.png motion.wav
-```
-
-Static regions go silent; movement goes loud.
-
-**6. Optional — find what changed.**
-
-```bash
-./imgaudio-diff-batch.sh          # writes change_log.txt, ranked by RMS
-python3 anomaly.py recurrence out/img.wav rp.png --discords 15
-```
-
-Encode with `--no-normalize` for diffs to cancel cleanly.
-
-Recurrence plots work best **one per frame**, not one per year — a year at
-`--size 1000` averages each pixel over hours of drone and comes out gray.
-
-```bash
-for f in out/*.wav; do
-  python3 anomaly.py --size 600 --bands 128 recurrence "$f" "rp/$(basename "$f" .wav).png"
-done
-montage rp/*.png -tile 24x -geometry 80x rp/grid.png
-```
-
-**7. Assemble and notate.**
-
-```bash
-sox out/*.wav year.wav norm -3
-
-python3 notate.py notes year.wav year_music.wav \
-    --scale minor_pent --root A2 --bpm 70 --grid 4 --voices 2 \
-    --midi year_music.mid
-
-ffmpeg -i year_music.wav -c:a libopus -b:a 96k year_music.opus
-```
-
-For very large sets, `sox out/*.wav` overflows the argument list — use
-`ls out/*.wav | sort | sed 's|^|file |' > list.txt` then
-`ffmpeg -f concat -safe 0 -i list.txt -c copy year.wav`.
 
 ## Colour
 
@@ -474,10 +266,13 @@ the grey picture rather than the coloured one.
 no number base at all.
 
 **`--base 60`** is just intonation: every degree is a small whole-number ratio
-to the root. A fifth is 3/2, a fourth 4/3, a whole tone 9/8. These terminate
-*exactly* in sexagesimal (3/2 = 1;30, 4/3 = 1;20, 9/8 = 1;07,30) — which is
-why base 60 was adopted for arithmetic, and why Mesopotamian tuning was built
-from cycles of fifths and fourths.
+to the root. A fifth is 3/2, a fourth 4/3, a whole tone 9/8. Because 60 divides
+by 2, 3 and 5, any ratio built from those primes terminates *exactly* in
+sexagesimal (3/2 = 1;30, 4/3 = 1;20, 9/8 = 1;07,30, and the pure third
+5/4 = 1;15). Mesopotamian tuning was built from cycles of fifths and fourths, so
+a scribe could have written every one of its ratios exactly; whether base 60
+shaped the music is not known. Ratios with 7 or 11 repeat forever in base 60,
+so the `harmonic` scale's 7/4 and 11/8 are the least sexagesimal of the set.
 
 ```bash
 python3 notate.py scales                                    # both tables
@@ -672,6 +467,245 @@ python3 notate.py notes spec.wav out.wav \
 
 Baseline for comparison: raw drone, base 10, `minor_pent`, defaults → 0.470.
 
+## Full workflow: a year of frames
+
+**1. Collect frames.** Name them so alphabetical = chronological:
+`frames/image-YYYYMMDD-HHMMSS.jpg`. Every batch script relies on this.
+
+Start hourly (8,760 frames/year, ~3 days encode) rather than per-minute
+(525,600 frames, months). Re-run finer later if it's worth it.
+
+**2. Check settings on one frame.**
+
+```bash
+python3 imgaudio.py --auto-prep roundtrip frames/first.jpg --out-dir check/
+```
+
+Open `check/first_roundtrip.png`. Middle panel should resemble the top panel.
+
+`--auto-prep` is not optional for outdoor photos — it percentile-clips each
+frame and inverts if still mostly bright. Without it, blown-out midday frames
+encode as a constant chord.
+
+**3. Batch encode.**
+
+```bash
+./imgaudio-batch.sh
+```
+
+Resumable — skips frames already done. Parallelize:
+
+```bash
+ls frames/*.jpg | parallel -j $(nproc) --bar \
+  'test -f out/{/.}.wav || python3 imgaudio.py --auto-prep --rows 300 --cols 600 encode {} out/{/.}.wav'
+```
+
+**4. Optional — lenses.** Sonify hidden structure instead of raw brightness.
+
+```bash
+python3 imgaudio.py --help                       # lists installed lenses
+python3 imgaudio.py --auto-prep --lens fractal encode img.jpg out.wav
+```
+
+See [Lenses](#lenses) for what each one surfaces.
+
+**5. Optional — motion.** Join the frames into a video and hear only what
+changed between them:
+
+```bash
+ffmpeg -framerate 15 -pattern_type glob -i 'frames/*.jpg' -c:v libx264 -pix_fmt yuv420p year.mp4
+python3 motion.py profile year.mp4 motion.wav
+```
+
+Static regions go silent; movement goes loud. Light changes too, so dawn and
+dusk sound like motion; raise `--floor` to quieten slow drifts. See From a video.
+
+**6. Optional — find what changed.**
+
+```bash
+./imgaudio-diff-batch.sh          # writes change_log.txt, ranked by RMS
+python3 anomaly.py recurrence out/img.wav rp.png --discords 15
+```
+
+Encode with `--no-normalize` for diffs to cancel cleanly.
+
+Recurrence plots work best **one per frame**, not one per year — a year at
+`--size 1000` averages each pixel over hours of drone and comes out gray.
+
+```bash
+for f in out/*.wav; do
+  python3 anomaly.py --size 600 --bands 128 recurrence "$f" "rp/$(basename "$f" .wav).png"
+done
+montage rp/*.png -tile 24x -geometry 80x rp/grid.png
+```
+
+**7. Assemble and notate.**
+
+```bash
+sox out/*.wav year.wav norm -3
+
+python3 notate.py notes year.wav year_music.wav \
+    --scale minor_pent --root A2 --bpm 70 --grid 4 --voices 2 \
+    --midi year_music.mid
+
+ffmpeg -i year_music.wav -c:a libopus -b:a 96k year_music.opus
+```
+
+For very large sets, `sox out/*.wav` overflows the argument list — use
+`ls out/*.wav | sort | sed 's|^|file |' > list.txt` then
+`ffmpeg -f concat -safe 0 -i list.txt -c copy year.wav`.
+
+## Rendering a recipe
+
+`render.py` runs the whole pipeline from a small TOML recipe, so you don't have
+to remember flags or keep encode and decode settings in step by hand.
+
+```bash
+python3 render.py recipes/example.toml --dry-run    # see the plan first
+python3 render.py recipes/example.toml              # render it
+```
+
+Outputs land in `renders/<recipe name>/`, one set of files per source:
+
+| file | what it is |
+|---|---|
+| `NAME.wav` | the encoded (or converted) audio |
+| `NAME.chroma.png` | colour sidecar, with `color = true` |
+| `NAME.png` | decode — the photo round-trip, or a recording's spectrogram |
+| `NAME.notes.wav` / `.mid` | the transcription |
+| `NAME.notes.png` | decode of the transcription — a picture of the performance |
+| `NAME.verify.json` | fidelity figures for this source |
+| `report.csv` | one row per source, with a summary printed at the end |
+| `recipe.toml` | a copy of the recipe, so the piece ships with how it was made |
+
+Sections you write are stages you get: encode and decode always run; notate
+runs when `[notate]` is present; assembly runs when `[assemble]` is present.
+Any stage can be switched off with `enabled = false`. Recipe keys are the
+tools' own flags with underscores (`--auto-prep` becomes `auto_prep`), and an
+unknown key is an error, so a typo can't silently fall back to a default.
+
+**Resumable and safe to interrupt.** Finished outputs are skipped, and each job
+renders into a private temp folder before moving results into place, so a
+killed run never leaves a half-written file behind.
+
+**Change a setting, rerun, and only what's affected is redone.** Each stage's
+settings are hashed. Change `[notate]` and the encodes are kept; change
+`[encode]` and everything reruns.
+
+### Recordings as sources
+
+Any sound file ffmpeg can read works as a source: WAV, MP3, M4A (phone
+recordings), FLAC, OGG. There's no hidden photo in an ordinary recording, so
+decode shows the sound's own structure.
+
+```toml
+[source]
+audio = "recordings/*"
+
+[decode]
+palette = "magma"
+```
+
+- **The frequency band is detected automatically** from where the recording's
+  energy actually sits, so a birdsong fills the frame instead of occupying a
+  thin strip. Set `[audio] f_lo` and `f_hi` to fix it instead.
+- **Long recordings are split into equal tiles**, 30 seconds by default
+  (`[audio] tile`), named `NAME.t001`, `NAME.t002`, ... and laid out in reading
+  order in `NAME.sheet.png`.
+- **Colour comes from a palette** — `viridis`, `magma`, `inferno`, or a list
+  of hex colours — since there's no photo to take it from.
+
+`recipes/recordings.toml` is a commented starting point. Images and recordings
+can be mixed in one recipe.
+
+### Sweeps — trying many settings at once
+
+`render.py` normally applies one configuration to many sources. A `[sweep]`
+section does the transpose: every combination of the listed values, over the
+same sources, ranked by how much of each source survived transcription.
+
+```toml
+[sweep.encode]
+lens = ["raw", "spectral"]
+
+[sweep.notate]
+base   = [10, 60]
+scale  = ["minor_pent", "harmonic"]
+voices = [3, 7]
+```
+
+```bash
+python3 render.py recipes/sweep.toml --dry-run   # count combinations first
+python3 render.py recipes/sweep.toml
+```
+
+Each combination gets its own folder (`v001`, `v002`, ...) alongside
+`variants.json` recording what each one was, and `sweep.csv` with every row
+from every variant. At the end it prints a ranking:
+
+```
+sweep.csv: 36 rows, 12 variants scored
+  ranked by mean fidelity across sources (n = sources scored per variant)
+  0.591 ±0.024  n=3   v008  lens=raw  base=60  scale=harmonic  voices=7
+  0.579 ±0.015  n=3   v007  lens=raw  base=60  scale=harmonic  voices=3
+  ...
+  best - worst = 0.108; per-source spread within the best variant is ±0.024
+```
+
+That last line is the guard against reading too much into a sweep: if the gap
+between best and worst is smaller than the variation between sources within
+one variant, it says so, and the ranking is noise.
+
+- **Combinations multiply.** Four axes of two values each is sixteen
+  variants; on twelve images that's 192 renders. `--dry-run` counts them, and
+  prints the first few, before you commit.
+- **Encodes are shared.** Variants with identical encode settings share one
+  encode folder, so a photo is encoded once per lens rather than once per
+  combination.
+- **Impossible combinations are skipped** with a note — a base-60 scale name
+  paired with base 10, for instance. Scale names are read from `notate.py`
+  itself, so adding one there needs no change here.
+- **Sweeps don't assemble.** One joined file per variant is rarely what you
+  want; `[assemble]` is ignored.
+- **Unscored axes still work.** Sweeping only `lens` or `palette` with no
+  `[notate]` section produces a gallery of variant folders and says there was
+  nothing to rank.
+
+`recipes/sweep.toml` is a commented starting point.
+
+### Across a fleet
+
+With the output folder on shared storage:
+
+```bash
+python3 render.py recipes/year.toml --prepare        # once, from one machine
+python3 render.py recipes/year.toml --shard 3/40     # on each worker
+python3 render.py recipes/year.toml                  # once more, to assemble
+```
+
+`--prepare` clears stale outputs and analyzes every recording once, so workers
+don't each repeat it. Workers take interleaved slices, so each gets a spread
+across the whole timeline. A worker refuses to start if the recipe changed
+since the last `--prepare`, rather than deleting files other workers may be
+using.
+
+### render.py gotchas
+
+- Colour only lines up with lenses that keep things where they were: `raw`,
+  `edges`, `fractal`. With `spectral` or `phyllotaxis` the decode has a
+  different layout from the photo, so the colour tints rather than recovers.
+  `render.py` warns when you combine them.
+- Each tile of a recording is brightness-normalized on its own, so loudness
+  differences between tiles don't show in the contact sheet.
+- A dark frame or silent tile has nothing to transcribe. It becomes silence
+  of the right length rather than a failure, so the assembled timeline keeps
+  its shape.
+- Assembling `from = "source"` with both images and recordings needs matching
+  sample rates: set `[audio] sr` to match `[encode] sr` (both default to
+  22050).
+- A hard kill (power loss, `kill -9`) can leave a stray folder in `.tmp/`.
+  It's harmless, and `--prepare` sweeps it up.
+
 ## Key parameters
 
 **imgaudio.py**
@@ -706,6 +740,18 @@ Baseline for comparison: raw drone, base 10, `minor_pent`, defaults → 0.470.
 | `--dry-mix` | 0.0 | blend this much source back under the notes |
 | `--verify` | off | report how much of the source survived |
 | `--transcribe-opts` | — | key=value extension point |
+
+**motion.py**
+
+| flag | default | effect |
+|---|---|---|
+| mode | — | `profile` (real time, height = pitch) or `frames` (each change a whole picture) |
+| `--fps` | 15 / 5 | frames per second sampled (profile / frames) |
+| `--box` | whole frame | x,y,w,h in pixels or fractions; only that region |
+| `--start` / `--duration` | whole clip | time range, seconds |
+| `--floor` | 0.03 | brightness change that counts as motion; raise for noisy video |
+| `--width` / `--slot` | 48 / 1.0 | frames mode: columns and seconds per moving step |
+| `--mux` | — | profile mode: write the clip with this sound as its soundtrack |
 
 **anomaly.py**
 
@@ -742,10 +788,11 @@ rebuilds them and shows exactly how they were made.
 the Hymn to Nikkal (Hurrian hymn h.6, Ugarit, about 1400 BCE), the oldest
 substantially complete written music known, rendered from the tablet's own
 notation: names of lyre string pairs, each with a number. The lyre is tuned in
-the `babylonian` scale, the same stacked fifths and fourths the Old Babylonian
-tuning tablets describe. Scholars disagree on whether each pair sounded together
-(Kilmer) or in turn (Dumbrill), so there is one clip of each. Only the first two
-notation lines are included, as transcribed from Laroche, *Ugaritica V* (1968);
+`nid_qablim`, the tuning the tablet's colophon names: the same stacked fifths
+and fourths the Old Babylonian tuning tablets describe. Scholars disagree on
+whether each pair sounded together (Kilmer) or in turn (Dumbrill), so there is
+one clip of each. Only the first two notation lines are included, as
+transcribed from Laroche, *Ugaritica V* (1968);
 `examples/hurrian-h6.py` lists exactly what comes from the sources and what is a
 choice, and new lines can be added to its `NOTATION` list. See them with
 `python3 imgaudio.py --palette octave --f-lo 100 --f-hi 1600 decode examples/h6-together.wav h6.png`.
@@ -753,7 +800,7 @@ choice, and new lines can be added to its `NOTATION` list. See them with
 **`examples/seikilos.wav`** — the Seikilos epitaph (1st or 2nd century CE), the
 oldest complete piece of music whose melody and rhythm can both be read. The
 melody comes straight from the letters carved over each syllable, with their
-length marks, played in Pythagorean tuning. With `--base 60 --scale babylonian`
+length marks, played in Pythagorean tuning. With `--base 60 --scale nid_qablim`
 notate.py hears it back at a fidelity near 0.9, since stacked fifths are the
 song's own tuning. `examples/seikilos.py` gives the sources and the one place it
 follows scholars over the image (the final cadence).
@@ -788,16 +835,56 @@ Auto-discovered, no registration. Two rules learned the hard way:
   after two or three recursions. This is why `phyllotaxis` smears each spiral
   sample across rows with a Gaussian instead of placing a single bright pixel.
 
+## The web page
+
+`web/` is the browser version. It runs the repository's own `imgaudio.py`,
+`notate.py` and `lenses/` unchanged, in Python compiled to WebAssembly
+(Pyodide), inside a background worker. There is no server: GitHub Pages serves
+static files, and everything runs on the visitor's device.
+
+| file | role |
+|---|---|
+| `index.html` | the page: Photo and Sound modes, settings, results |
+| `worker.js` | loads Pyodide and the scripts, runs each request off the main thread |
+| `bridge.py` | turns the page's settings into the scripts' own command-line flags; also swaps in a scipy STFT helper that fits 32-bit WebAssembly (identical numbers) |
+| `build.sh` | assembles the site into `_site/` |
+| `icons/`, `manifest.webmanifest` | tab and home-screen icons: the translators' stone |
+
+Adding a lens or a scale to the scripts needs no change here; the page reads
+them at startup. Only the grouping and display names of the scale menus live in
+`bridge.py`, and anything not listed there still appears under "Other".
+
+**Try it locally** (no virtual environment needed):
+
+```bash
+./web/build.sh
+python3 -m http.server -d _site 8000      # then open http://localhost:8000
+```
+
+Rebuild after changes and hard-refresh the browser so it picks up the new worker.
+
+**Deploying** is automatic: every push to `main` runs
+`.github/workflows/pages.yml`, which builds and publishes the site. The one-time
+setup is Settings → Pages → Source: GitHub Actions.
+
+**Versions.** `VERSION` holds the release number and is bumped by hand
+(`echo 0.7.0 > VERSION`). The build adds the commit and date, marking a build
+from uncommitted changes `-dirty`, and the footer shows all three. Its "Report a
+problem" link opens a GitHub issue pre-filled with the version, the browser and
+the last error.
+
 ## Gotchas
 
 - `--lossless` ignores lenses, colour, and all spectrogram parameters. It's a
   byte copy — the original file already has its colour.
-- Encode and decode must use the same `--rows`, `--cols`, `--f-lo`, `--f-hi`.
+- Encode and decode must use the same `--rows`, `--cols`, `--f-lo`, `--f-hi` and
+  `--freq-scale`.
 - A lens during encode means the round-trip reconstructs what the lens *saw*,
   not the original. That's the point, but it surprises you the first time.
-- **`notate.py` output cannot be decoded back to a picture.** It's a branch off
-  the pipeline, not a stage in it — the notes are synthesized from scratch and
-  the source is gone. Use `--dry-mix` if you need the image to survive.
+- **`notate.py` output cannot be decoded back to the source picture.** It's a
+  branch off the pipeline, not a stage in it — the notes are synthesized from
+  scratch and the source is gone; decoding it shows the notes. Use `--dry-mix`
+  if you need the image to survive.
 - `--color` on decode without a matching `.chroma.png` warns and falls back to
   grayscale. The sidecar must sit beside the WAV with the same stem, so move
   or copy them together.

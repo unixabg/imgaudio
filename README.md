@@ -31,6 +31,7 @@ imgaudio.py              image ↔ audio, with lens support
 notate.py                audio → musical notes + MIDI
 anomaly.py               recurrence plots + anomaly ranking
 flow_prep.py             consecutive frames → motion images
+motion.py                video → sound of only what moves
 lenses/                  edges.py, fractal.py, phyllotaxis.py, spectral.py, _example.py
 imgaudio-batch.sh        encode every frame
 imgaudio-diff-batch.sh   per-frame diffs + change_log.txt
@@ -118,6 +119,40 @@ To colourize arbitrary audio afterwards:
 convert look.png -auto-level \
     \( -size 1x256 gradient:'#440154-#fde725' -rotate 90 \) -clut viridis.png
 ```
+
+## Hearing motion in video
+
+`motion.py` subtracts each video frame from the one before it, so everything
+still cancels and only motion is left, then turns that motion into sound. A
+still scene is silent; wind in a tree is heard as it moves through the frame.
+
+```bash
+# real time: height in the frame becomes pitch, top = high; put it back on the video
+python3 motion.py profile wind.mp4 wind.wav --mux wind-heard.mp4
+
+# full frame to frame: each change becomes a whole small picture; still steps are skipped
+python3 motion.py frames wind.mp4 wind-frames.wav
+
+# only part of the picture, and only part of the clip
+python3 motion.py profile wind.mp4 tree.wav --box 0.2,0,0.5,0.6 --start 3 --duration 10
+
+# music from only the motion
+python3 notate.py notes wind.wav wind-music.wav --voice lyre --base 60 --scale nid_qablim --grid 16
+```
+
+`profile` keeps the clip's timing, so its sound can be the video's soundtrack;
+where across the frame something moved is not kept. `frames` keeps whole frames
+(decoding its sound gives them back, r ≈ 0.87 in testing) but runs slower than
+the video, about one second per moving step by default. `--box` takes pixels or
+fractions of the frame. `--floor` (default 0.03) is how much a pixel must change
+to count as motion; raise it for noisy or heavily compressed video.
+
+On a generated 20-second test clip (two gusts in a tree, grass, a bird, still in
+between), every still moment came out exactly silent and each motion landed in
+its own band: the crown at 0.8–3.5 kHz, the grass at 80–140 Hz, the bird at
+4.5–5.5 kHz. Loudness follows how much moved, so a bird is far quieter than a
+gust. Notes from `notate.py` can start up to one grid step before or after
+motion, because it snaps onsets to the beat grid.
 
 ## Rendering a recipe
 

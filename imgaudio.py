@@ -251,6 +251,144 @@ def apply_octave(gray_arr, f_lo, f_hi, scale="log"):
 
 
 # ---------------------------------------------------------------------------
+# Annotation — rulers on a decoded picture, for reading it precisely
+# ---------------------------------------------------------------------------
+# A decoded picture shows the shape of a sound; the rulers say exactly when
+# and at what pitch. The annotated copy is for reading only: it is written
+# beside the plain picture, which stays untouched so the round trip still works.
+
+_NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+
+
+def _font(size):
+    from PIL import ImageFont
+    for name in ("DejaVuSans.ttf", "DejaVuSans-Bold.ttf", "Arial.ttf"):
+        try:
+            return ImageFont.truetype(name, size)
+        except OSError:
+            pass
+    try:
+        return ImageFont.load_default(size=size)       # Pillow 10.1+
+    except TypeError:
+        return ImageFont.load_default()
+
+
+def _nice_step(span, target):
+    """A round step (1, 2 or 5 x 10^n) giving about `target` ticks over span."""
+    raw = span / max(target, 1)
+    mag = 10 ** np.floor(np.log10(raw))
+    for m in (1, 2, 5, 10):
+        if m * mag >= raw:
+            return m * mag
+    return 10 * mag
+
+
+def annotate(picture, out_path, *, t_first, t_last, f_lo, f_hi, scale="log",
+             octave_key=False, title=""):
+    """Write a copy of a decoded picture with a time ruler (seconds, bottom),
+    a frequency ruler (Hz, left) and note names (right; every C, plus A4).
+
+    picture       uint8 array, (rows, cols) grey or (rows, cols, 3) colour;
+                  row 0 is the highest frequency, as decode writes it
+    t_first/last  seconds at the centres of the first and last columns
+    """
+    from PIL import ImageDraw
+    pic = Image.fromarray(picture).convert("RGB")
+    cols, rows = pic.size
+    k = max(1, int(np.ceil(900 / cols)))                 # enlarge small pictures
+    pic = pic.resize((cols * k, rows * k), Image.NEAREST)
+    W, H = pic.size
+    L, R, T, B = 74, 78, 34, 46 + (34 if octave_key else 0)
+    out = Image.new("RGB", (L + W + R, T + H + B), "white")
+    out.paste(pic, (L, T))
+    d = ImageDraw.Draw(out)
+    f_small, f_label = _font(13), _font(14)
+    ink, faint = (20, 20, 20), (120, 120, 120)
+
+    freqs = freq_grid(f_lo, f_hi, rows, scale)           # row 0 = lowest here
+    def y_of(freq):
+        """Pixel row of a frequency: centre of the row it falls in."""
+        if scale == "linear":
+            i = (freq - f_lo) / (f_hi - f_lo) * (rows - 1)
+        else:
+            i = np.log(freq / f_lo) / np.log(f_hi / f_lo) * (rows - 1)
+        return T + (rows - 1 - i + 0.5) * k
+
+    def x_of(t):
+        """Pixel column of a time: decode's columns are evenly spaced from
+        t_first to t_last, each centred on its analysis window."""
+        j = (t - t_first) / max(t_last - t_first, 1e-9) * (cols - 1)
+        return L + (j + 0.5) * k
+
+    d.rectangle((L - 1, T - 1, L + W, T + H), outline=ink)
+
+    # Frequency ruler (left)
+    if scale == "linear":
+        step = _nice_step(f_hi - f_lo, 8)
+        ticks = np.arange(np.ceil(f_lo / step) * step, f_hi + 1e-9, step)
+    else:
+        ticks = [m * 10 ** e for e in range(1, 6) for m in (1, 2, 5)]
+    for f in ticks:
+        if f_lo <= f <= f_hi:
+            y = y_of(f)
+            d.line((L - 6, y, L - 1, y), fill=ink)
+            label = f"{f / 1000:g}k" if f >= 1000 else f"{f:g}"
+            d.text((L - 9, y), label, fill=ink, font=f_small, anchor="rm")
+    d.text((10, T - 20), "Hz", fill=faint, font=f_small)
+
+    # Note names (right): every C, and A4 = 440 Hz for reference
+    last_y = None
+    marks = [(12 * (o + 1), f"C{o}") for o in range(0, 10)] + [(69, "A4")]
+    for midi, name in sorted(marks, key=lambda m: -m[0]):
+        f = 440.0 * 2 ** ((midi - 69) / 12)
+        if not f_lo <= f <= f_hi:
+            continue
+        y = y_of(f)
+        if last_y is not None and abs(y - last_y) < 14:
+            continue
+        d.line((L + W, y, L + W + 6, y), fill=ink)
+        d.text((L + W + 9, y), name, fill=ink, font=f_small, anchor="lm")
+        last_y = y
+    d.text((L + W + 9, T - 20), "note", fill=faint, font=f_small)
+
+    # Time ruler (bottom)
+    span = t_last - t_first
+    step = _nice_step(span, 10)
+    half_col = span / max(cols - 1, 1) / 2               # the picture's edge
+    for t in np.arange(np.ceil((t_first - half_col) / step) * step, t_last + half_col + 1e-9, step):
+        x = x_of(t)
+        d.line((x, T + H, x, T + H + 6), fill=ink)
+        d.text((x, T + H + 9), f"{round(t, 6) + 0:g}", fill=ink, font=f_small, anchor="mt")
+    d.text((L + W + 9, T + H + 9), "s", fill=faint, font=f_small)
+
+    # Title
+    scale_word = "linear" if scale == "linear" else "log"
+    d.text((L, 10), title or "", fill=ink, font=f_label)
+    d.text((L + W, 10), f"{f_lo:g}–{f_hi:g} Hz, {scale_word} scale, top = high",
+           fill=faint, font=f_small, anchor="ra")
+
+    # Octave light key: the colour of each note, the same in every octave
+    if octave_key:
+        y0 = T + H + 40
+        d.text((L, y0 + 8), "colour = note:", fill=ink, font=f_small, anchor="lm")
+        x = L + 110
+        rgb = octave_rgb(261.6256 * 2.0 ** (np.arange(12) / 12))
+        for name, col in zip(_NOTE_NAMES, rgb):
+            c = tuple(int(round(v * 255)) for v in col)
+            d.rectangle((x, y0, x + 26, y0 + 14), fill=c)
+            d.text((x + 13, y0 + 17), name, fill=ink, font=_font(11), anchor="mt")
+            x += 32
+    out.save(out_path)
+    return out_path
+
+
+def annotated_path(image_path):
+    """look.png -> look.annotated.png"""
+    p = Path(image_path)
+    return p.with_name(p.stem + ".annotated" + p.suffix)
+
+
+# ---------------------------------------------------------------------------
 # Encoder
 # ---------------------------------------------------------------------------
 def encode(image_path, audio_path, *, sr, rows, cols, f_lo, f_hi, col_sec,
@@ -351,7 +489,7 @@ def encode(image_path, audio_path, *, sr, rows, cols, f_lo, f_hi, col_sec,
 # ---------------------------------------------------------------------------
 def decode(audio_path, image_path, *, sr, rows, cols, f_lo, f_hi,
            lossless=False, color=False, lens="raw", lens_params=None,
-           palette="grey", freq_scale="log", **_):
+           palette="grey", freq_scale="log", annotate_out=False, **_):
     """Recover the image from the audio via STFT magnitude, or raw-byte decode."""
     if lossless:
         # Raw byte mode: WAV samples ARE the image bytes. Strip header, write file.
@@ -441,6 +579,17 @@ def decode(audio_path, image_path, *, sr, rows, cols, f_lo, f_hi,
                   file=sys.stderr)
         Image.fromarray(img_arr, mode="L").save(image_path)
         print(f"decoded: {image_path}  ({cols}×{rows})")
+
+    if annotate_out:
+        shown = np.asarray(Image.open(image_path))
+        n = len(audio)
+        out = annotate(shown, annotated_path(image_path),
+                       t_first=(nperseg / 2) / sr, t_last=(n - nperseg / 2) / sr,
+                       f_lo=f_lo, f_hi=f_hi, scale=freq_scale,
+                       octave_key=(palette == "octave" and shown.ndim == 3
+                                   and not (color and sidecar.exists())),
+                       title=Path(audio_path).name)
+        print(f"annotated: {out}  (rulers for reading; re-encode the plain picture)")
 
 
 # ---------------------------------------------------------------------------
@@ -574,6 +723,10 @@ def build_parser():
                         "height (how we hear); linear gives every Hz the same "
                         "height (how most spectrogram tools draw). Encode and "
                         "decode must use the same scale")
+    p.add_argument("--annotate", action="store_true",
+                   help="decode only: also write NAME.annotated.png with a time "
+                        "ruler, a frequency ruler and note names, for reading the "
+                        "picture precisely. The plain picture is unchanged")
     p.add_argument("--palette", choices=["grey", "octave"], default="grey",
                    help="decode only: 'octave' colours each pitch by raising "
                         "it by octaves into visible light, so every sound "
@@ -611,7 +764,8 @@ def main(argv=None):
               lossless=args.lossless,
               lens=args.lens, lens_params=_parse_lens_params(args.lens_params),
               color=args.color, color_width=args.color_width,
-              palette=args.palette, freq_scale=args.freq_scale)
+              palette=args.palette, freq_scale=args.freq_scale,
+              annotate_out=args.annotate)
 
     if args.cmd == "encode":
         encode(args.image, args.audio, **kw)

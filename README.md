@@ -87,6 +87,32 @@ the default 80–8000 Hz band, so try `--f-lo 40 --f-hi 4000`; a flat gray field
 means the audio is too self-similar at that resolution, so drop to
 `--rows 200 --cols 400`.
 
+### Reading it with rulers
+
+`--annotate` also writes `look.annotated.png`: the same picture, enlarged, with
+seconds along the bottom, Hz on the left and note names on the right (every C,
+plus A4). With `--palette octave` it adds a key of the twelve note colours.
+
+```bash
+python3 imgaudio.py --rows 300 --cols 600 --annotate decode mystery.wav look.png
+```
+
+`look.png` itself is unchanged, so it still encodes back into sound; the
+annotated copy is only for reading. Read a note's pitch from the middle of its
+line. Below about 300 Hz the lines widen into bands (the decoder's pitch steps are
+about 21.5 Hz apart at 22.05 kHz), so low notes are only accurate to about a
+semitone.
+
+In two blind rounds, readers (language models, two per condition, reading by
+eye) judged the same 12 clips. With the rulers they named the first note exactly
+24 and 17 times out of 24, and within a semitone 24 and 23 times. Given only a
+written description of the axes: 19 and 14 exactly. With no axis information:
+0 and 9, and the misses were all the same error, every pitch about eight
+semitones low from a wrong guess at the range. So the rulers help most by keeping
+the scale attached to the picture, and the remaining misses are the last semitone
+of low notes, where the band is wider than the interval. Timing was read well in
+every condition.
+
 ### Hidden pictures
 
 Pictures that people deliberately draw into a sound often sit above the default
@@ -721,6 +747,7 @@ using.
 | `--color-width` | 32 | chroma sidecar width; 8–32 all look reasonable |
 | `--palette` | grey | decode only: `octave` colours each pitch, shared by every sound |
 | `--freq-scale` | log | `linear` spaces rows evenly in Hz, as most spectrogram tools draw; encode and decode must match |
+| `--annotate` | off | decode only: also write `NAME.annotated.png` with seconds, Hz and note-name rulers |
 | `--lossless` | off | byte-exact archive; audio is harsh noise |
 | `--no-normalize` | off | needed for clean diffs |
 | `--lens` / `--lens-params` | raw | apply a lens |

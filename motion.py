@@ -161,10 +161,15 @@ def mux(video, sound, out, start, duration):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("mode", choices=["profile", "frames"])
-    p.add_argument("video")
+    class _Fmt(argparse.RawDescriptionHelpFormatter,
+               argparse.ArgumentDefaultsHelpFormatter):
+        pass
+
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=_Fmt)
+    p.add_argument("mode", choices=["profile", "frames"],
+                   help="profile: real time, height = pitch; frames: every "
+                        "changed frame as its own small picture (see above)")
+    p.add_argument("video", help="any video ffmpeg can read")
     p.add_argument("output", help="WAV to write")
     p.add_argument("--fps", type=float, default=None,
                    help="frames per second to sample (profile 15, frames 5)")
@@ -190,12 +195,19 @@ def main(argv=None):
     p.add_argument("--png", default=None, help="also save the motion picture here")
     p.add_argument("--mux", default=None,
                    help="profile mode: write the clip with this sound as its soundtrack")
-    p.add_argument("--lens", default="raw")
-    p.add_argument("--lens-params", default="")
-    p.add_argument("--f-lo", type=float, default=imgaudio.DEFAULTS["f_lo"])
-    p.add_argument("--f-hi", type=float, default=imgaudio.DEFAULTS["f_hi"])
-    p.add_argument("--freq-scale", choices=["log", "linear"], default="log")
-    p.add_argument("--sr", type=int, default=imgaudio.DEFAULTS["sr"])
+    p.add_argument("--lens", default="raw",
+                   help="imgaudio lens applied to the motion picture before "
+                        "encoding (raw, edges, reveal, ...; see imgaudio.py -h)")
+    p.add_argument("--lens-params", default="",
+                   help="comma-separated key=value settings for the lens")
+    p.add_argument("--f-lo", type=float, default=imgaudio.DEFAULTS["f_lo"],
+                   help="pitch of the bottom of the frame, Hz")
+    p.add_argument("--f-hi", type=float, default=imgaudio.DEFAULTS["f_hi"],
+                   help="pitch of the top of the frame, Hz")
+    p.add_argument("--freq-scale", choices=["log", "linear"], default="log",
+                   help="how height maps to pitch; decode with the same setting")
+    p.add_argument("--sr", type=int, default=imgaudio.DEFAULTS["sr"],
+                   help="sample rate of the WAV, Hz")
     p.add_argument("--gamma", type=float, default=1.0,
                    help="contrast of the motion picture; 1.0 keeps loudness "
                         "proportional to how much moved")

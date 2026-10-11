@@ -682,14 +682,24 @@ def build_parser():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     # Shared params (apply to all subcommands)
-    p.add_argument("--sr",       type=int,   default=DEFAULTS["sr"])
-    p.add_argument("--rows",     type=int,   default=DEFAULTS["rows"])
-    p.add_argument("--cols",     type=int,   default=DEFAULTS["cols"])
-    p.add_argument("--f-lo",     type=float, default=DEFAULTS["f_lo"])
-    p.add_argument("--f-hi",     type=float, default=DEFAULTS["f_hi"])
-    p.add_argument("--col-sec",  type=float, default=DEFAULTS["col_sec"])
-    p.add_argument("--gamma",    type=float, default=DEFAULTS["gamma"])
-    p.add_argument("--threshold",type=float, default=DEFAULTS["threshold"])
+    p.add_argument("--sr",       type=int,   default=DEFAULTS["sr"],
+                   help="sample rate of the audio, Hz. Pitches above half of "
+                        "it cannot exist, so use 44100 with --f-hi above 11000")
+    p.add_argument("--rows",     type=int,   default=DEFAULTS["rows"],
+                   help="picture height: pitch steps between --f-lo and --f-hi")
+    p.add_argument("--cols",     type=int,   default=DEFAULTS["cols"],
+                   help="picture width: time steps")
+    p.add_argument("--f-lo",     type=float, default=DEFAULTS["f_lo"],
+                   help="pitch of the bottom row, Hz")
+    p.add_argument("--f-hi",     type=float, default=DEFAULTS["f_hi"],
+                   help="pitch of the top row, Hz (encode requires it below --sr/2)")
+    p.add_argument("--col-sec",  type=float, default=DEFAULTS["col_sec"],
+                   help="encode: seconds per column; the sound lasts cols x this")
+    p.add_argument("--gamma",    type=float, default=DEFAULTS["gamma"],
+                   help="contrast curve on brightness; above 1 darkens the "
+                        "midtones and quietens faint detail")
+    p.add_argument("--threshold",type=float, default=DEFAULTS["threshold"],
+                   help="brightness (0-1) below which a pixel is silent")
     p.add_argument("--auto-prep", action="store_true",
                    help="Adaptive preprocessing: percentile-clip, invert if "
                         "mostly bright, mild gamma. Useful for batches of "
@@ -740,10 +750,12 @@ def build_parser():
     sub = p.add_subparsers(dest="cmd", required=True)
 
     pe = sub.add_parser("encode", help="image → audio")
-    pe.add_argument("image"); pe.add_argument("audio")
+    pe.add_argument("image", help="picture to encode (any format PIL reads)")
+    pe.add_argument("audio", help="WAV to write")
 
     pd = sub.add_parser("decode", help="audio → image")
-    pd.add_argument("audio"); pd.add_argument("image")
+    pd.add_argument("audio", help="WAV to read (from encode, or any recording)")
+    pd.add_argument("image", help="PNG to write; --annotate adds NAME.annotated.png")
 
     pr = sub.add_parser("roundtrip", help="encode + decode + plot")
     pr.add_argument("image")

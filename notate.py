@@ -36,12 +36,29 @@ Subcommands:
     notes IN.wav OUT.wav        transcribe and re-synthesize
     scales                      list available scales for both bases
 
+Instruments (--voice): vibes (the original struck tone), piano, harp, pad,
+and two ancient Mesopotamian instruments, lyre (sammûm) and reed (embūbum,
+a reed pipe). All are synthesized approximations.
+
+Tunings (--base 60 --scale ...): besides the just scales, the seven
+Babylonian tunings from the cuneiform texts: isartum, kitmum, embubum,
+pitum, nid_qablim (the tuning named on the Hurrian hymn, same notes as
+"babylonian"), nis_gabari, qablitum. `scales` lists them all.
+
 Examples:
     python3 notate.py notes drone.wav melody.wav
     python3 notate.py notes drone.wav melody.wav --verify
     python3 notate.py notes drone.wav melody.wav --base 60 --scale babylonian
     python3 notate.py notes drone.wav melody.wav --base 60 --scale harmonic
     python3 notate.py notes drone.wav melody.wav --bpm 60 --grid 12 --voices 1
+    python3 notate.py notes wind.wav wind-music.wav --voice lyre --base 60 --scale nid_qablim
+    python3 notate.py notes drone.wav melody.wav --voice reed --midi melody.mid
+
+Timing: --bpm and --grid set the size of the time step the audio is cut into
+(step = 60/bpm * 4/grid seconds). Notes are placed at the real time they
+occurred, so the music stays as long as the source and in step with any
+video it came from; a slower tempo gives fewer, longer notes, not a slower
+piece. --bpm 60 --grid 32 and --bpm 120 --grid 16 cut the same steps.
 
 Dependencies: numpy, scipy  (MIDI writer is built in)
 """
@@ -675,32 +692,45 @@ def cmd_scales(args):
 
 
 def build_parser():
-    p = argparse.ArgumentParser(
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter)
+    class _Fmt(argparse.RawDescriptionHelpFormatter,
+               argparse.ArgumentDefaultsHelpFormatter):
+        pass
+
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=_Fmt)
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    pn = sub.add_parser("notes", help="transcribe audio into musical notes")
-    pn.add_argument("input"); pn.add_argument("output")
+    pn = sub.add_parser("notes", help="transcribe audio into musical notes",
+                        formatter_class=_Fmt)
+    pn.add_argument("input", help="source audio (WAV)")
+    pn.add_argument("output", help="WAV to write, the notes played by --voice")
     pn.add_argument("--base",   type=int, choices=[10, 60], default=10,
-                    help="10 = equal temperament (default); "
+                    help="10 = equal temperament; "
                          "60 = just intonation, whole-number ratios")
-    pn.add_argument("--scale",  default="minor_pent")
-    pn.add_argument("--root",   default="A2")
-    pn.add_argument("--bpm",    type=float, default=100.0)
+    pn.add_argument("--scale",  default="minor_pent",
+                    help="scale to snap pitches to; `notate.py scales` lists "
+                         "them for each --base (the seven Babylonian tunings "
+                         "are --base 60)")
+    pn.add_argument("--root",   default="A2",
+                    help="root note of the scale, e.g. A2, C4, F#3")
+    pn.add_argument("--bpm",    type=float, default=100.0,
+                    help="tempo. With --grid it sets the time step; notes keep "
+                         "their real timing, so slower means fewer, longer notes")
     pn.add_argument("--grid",   type=int,   default=8,
                     help="rhythmic grid: 4=quarter, 8=eighth, 16=sixteenth; "
                          "3/6/12 give triplet subdivisions")
     pn.add_argument("--voices", type=int,   default=3,
                     help="max simultaneous notes per grid step")
-    pn.add_argument("--f-lo",   type=float, default=80.0)
-    pn.add_argument("--f-hi",   type=float, default=4000.0)
+    pn.add_argument("--f-lo",   type=float, default=80.0,
+                    help="lowest pitch to look for, Hz")
+    pn.add_argument("--f-hi",   type=float, default=4000.0,
+                    help="highest pitch to look for, Hz")
     pn.add_argument("--peak-rel", type=float, default=0.25,
                     help="peak height as fraction of the frame max (0-1); "
                          "lower = more notes")
     pn.add_argument("--decay",  type=float, default=2.5,
                     help="note decay rate; lower = longer sustain")
-    pn.add_argument("--midi",   default=None, help="also write a .mid file")
+    pn.add_argument("--midi",   default=None, metavar="FILE",
+                    help="also write the notes as a MIDI file")
     pn.add_argument("--voice", choices=list(VOICES), default="vibes",
                     help="instrument for the WAV: vibes (the original tone), "
                          "piano, harp, pad, and two ancient Mesopotamian "
@@ -722,10 +752,11 @@ def build_parser():
                          "beneath the notes; does not recover anything, but "
                          "the source underneath still carries whatever image "
                          "encoded it")
-    pn.add_argument("--print-notes", type=int, default=0,
-                    help="print the first N notes")
+    pn.add_argument("--print-notes", type=int, default=0, metavar="N",
+                    help="print the first N notes as text")
 
-    sub.add_parser("scales", help="list available scales for both bases")
+    sub.add_parser("scales", help="list available scales for both bases, "
+                                  "including the seven Babylonian tunings")
     return p
 
 

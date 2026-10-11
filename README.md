@@ -361,18 +361,26 @@ hear. They don't always agree.
 
 ## Instruments
 
-`--voice` picks the instrument `notate.py` plays its notes on. Each is a small
-additive recipe (harmonics, how fast the upper ones fade, attack, pluck or
-breath noise, vibrato), not a recording:
+`--voice` picks the instrument `notate.py` plays its notes on. They are
+synthesized, not recorded, but most are modelled on how the real instrument
+makes its sound, so each has the character of the real thing rather than of a
+recipe:
 
-| `--voice` | sound | MIDI instrument |
+| `--voice` | how it is made | MIDI instrument |
 |---|---|---|
 | `vibes` | the original struck tone (default; output unchanged) | 11 vibraphone |
-| `piano` | bright strike, slightly stretched overtones, long ring | 0 piano |
-| `harp` | clean pluck | 46 harp |
+| `vibraphone` | a tuned aluminium bar (modes at 1 : 4 : 10), resonator, motor tremolo | 11 vibraphone |
+| `piano` | stiff strings (overtones run sharp), two or three slightly detuned strings per note, a felt hammer that is darker when played softly, a fast then slow decay, a hammer knock | 0 piano |
+| `harp` | a plucked string: a finger a third of the way along it, long-ringing in the bass, through a soundboard | 46 harp |
 | `pad` | slow swell, three detuned voices, held | 89 pad |
-| `lyre` | the *sammûm* of the Hurrian hymns and the Lyres of Ur: gut-string pluck, bright onset that dulls fast | 107 koto |
-| `reed` | the *embūbum*, reed pipe, like the silver pipes of Ur: double reed, held, buzzy, breathy, vibrato | 111 shanai |
+| `lyre` | the *sammûm* of the Hurrian hymns and the Lyres of Ur: gut strings struck with a plectrum near the bridge, bright and short-lived, over a small wooden box | 107 koto |
+| `reed` | the *embūbum*, reed pipe, like the silver pipes of Ur: a blown double reed whose pitch settles from slightly flat, with growing vibrato, a breath waver and breath noise | 111 shanai |
+
+The plucked strings are a loop one vibration long that feeds back on itself,
+losing a little energy each trip (more for the upper partials), started from
+the shape a finger or plectrum leaves. That is why higher notes and higher
+overtones die sooner, as on a real string. The tuning is exact (within a cent,
+or 0.0 cents for the strings), so the base-60 scales keep their small differences.
 
 General MIDI has no ancient instruments, so `--midi` files ask for the nearest
 one; the WAV is the synthesized original. `--program` overrides it.
@@ -762,7 +770,7 @@ using.
 | `--voices` | 3 | max simultaneous notes |
 | `--peak-rel` | 0.25 | density dial; lower = many more notes |
 | `--decay` | 2.5 | lower = longer sustain |
-| `--voice` | vibes | instrument for the WAV: vibes, piano, harp, pad, lyre, reed (see Instruments) |
+| `--voice` | vibes | instrument for the WAV: vibes, vibraphone, piano, harp, pad, lyre, reed (see Instruments) |
 | `--program` | from voice | GM instrument for `--midi`; defaults to the voice's nearest |
 | `--dry-mix` | 0.0 | blend this much source back under the notes |
 | `--verify` | off | report how much of the source survived |

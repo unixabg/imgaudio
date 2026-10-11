@@ -36,9 +36,11 @@ Subcommands:
     notes IN.wav OUT.wav        transcribe and re-synthesize
     scales                      list available scales for both bases
 
-Instruments (--voice): vibes (the original struck tone), piano, harp, pad,
-and two ancient Mesopotamian instruments, lyre (sammûm) and reed (embūbum,
-a reed pipe). All are synthesized approximations.
+Instruments (--voice): vibes (the original struck tone), piano, harp,
+vibraphone, pad, and two ancient Mesopotamian instruments, lyre (sammûm)
+and reed (embūbum, a reed pipe). Piano, harp, vibraphone, lyre and reed are
+modelled on how the real instrument makes its sound (plucked strings, felt
+hammers, a blown reed); they are synthesized, not recorded.
 
 Tunings (--base 60 --scale ...): besides the just scales, the seven
 Babylonian tunings from the cuneiform texts: isartum, kitmum, embubum,
@@ -70,7 +72,7 @@ from fractions import Fraction
 
 import numpy as np
 from scipy.io import wavfile
-from scipy.signal import stft, find_peaks, resample
+from scipy.signal import stft, find_peaks, resample, iirpeak, lfilter
 
 
 # ---------------------------------------------------------------------------
@@ -407,44 +409,238 @@ def transcribe(sr, audio, root_midi, scale, bpm, grid, voices,
 # ---------------------------------------------------------------------------
 # Synthesis
 # ---------------------------------------------------------------------------
-# Instrument voices. Each is a small additive recipe, not a recording:
+# Instrument voices. Most are modelled on how the real instrument makes its
+# sound, rather than recorded:
+#   string     a plucked string (harp, lyre): a loop one period long that
+#              feeds back through a gentle low-pass, started from the shape a
+#              finger or plectrum leaves, heard through a wooden body. Higher
+#              partials and higher notes die sooner, as on a real string.
+#   piano      stiff strings (overtones run sharp), two or three strings per
+#              note slightly out of tune with each other, a felt hammer that
+#              gives fewer high partials when played softly, a fast then slow
+#              decay, and a knock at the onset
+#   reed       a blown double reed: pitch settles from slightly flat, vibrato
+#              grows in, a slow waver, breath shaped by the pipe's resonances
+#   vibraphone a tuned aluminium bar (modes at 1 : 4 : 10), a resonator, and
+#              the motor-driven tremolo
+# "vibes" is notate.py's original tone and keeps its original code path;
+# "pad" is a synthesizer sound and stays an additive recipe:
 #   harmonics  relative amplitude of partials 1, 2, 3, ...
-#   hdecay     extra decay per partial above the first (upper partials of a
-#              plucked or struck string die first, so the tone darkens)
-#   decay_mul  multiplies --decay for plucked and struck voices
-#   held       sustain for the note's length, then release (bowed, blown, pads)
+#   held       sustain for the note's length, then release
 #   attack, release, tail  seconds
-#   stretch    piano-like inharmonicity: partial k sits at k*sqrt(1+B*k^2)
 #   vibrato    (rate Hz, depth as a fraction of pitch)
 #   chorus     detuned copies in cents, for width
-#   pluck      short noise burst at the onset; breath: noise under a blown note
 #   program    General MIDI instrument written to --midi files
-# "vibes" is notate.py's original tone and keeps its original code path.
+
+
+# --- plucked string -------------------------------------------------------
+def _lagrange3(d):
+    """3rd-order Lagrange fractional-delay taps for a delay d (1 <= d < 2)."""
+    h = np.ones(4)
+    for k in range(4):
+        for m in range(4):
+            if m != k:
+                h[k] *= (d - m) / (k - m)
+    return h
+
+
+def _body(y, sr, peaks):
+    """A wooden body: the sound plus a few broad resonances (Hz, Q, gain)."""
+    out = y.copy()
+    for f, q, g in peaks:
+        if f < sr / 2 * 0.9:
+            b, a = iirpeak(f, q, fs=sr)
+            out += g * lfilter(b, a, y)
+    return out
+
+
+def _string_note(freq, dur_s, sr, rng, decay, *, t60_ref, t60_exp, t60_min,
+                 t60_max, loss, pluck_at, finger, plectrum_noise, tail, body,
+                 release=0.06, **_):
+    period = sr / freq                         # samples per vibration
+    # loop delay: N whole samples + 1 (loss filter) + d (fractional) = period,
+    # so the tuning is exact, which matters for the base-60 scales
+    m = period - 1.0
+    N = int(np.floor(m)) - 1
+    if N < 2:                                  # above what this rate can model
+        return None
+    d = m - N
+    t60 = float(np.clip(t60_ref * (110.0 / freq) ** t60_exp, t60_min, t60_max))
+    t60 *= 2.5 / decay                         # --decay: lower = longer
+    g = 10 ** (-3.0 / (t60 * freq))            # loss per trip along the string
+    # ring until the hand stops it, or until it has faded to nothing
+    n = int(min(max(dur_s, 0.1) + tail, max(dur_s, 0.1) + 1.3 * t60) * sr)
+    h = g * np.convolve([loss, 1 - 2 * loss, loss], _lagrange3(d))
+
+    # start: a triangle peaking where the string was plucked, its corner
+    # rounded by a fleshy finger
+    L = int(round(period))
+    x = np.arange(L) / L
+    shape = np.where(x < pluck_at, x / pluck_at, (1 - x) / (1 - pluck_at))
+    if finger > 0:
+        w = max(1, int(finger * L))
+        shape = np.convolve(shape, np.ones(w) / w, mode="same")
+
+    exc = np.zeros(n)
+    exc[:min(L, n)] = shape[:n]
+    if N < 64:
+        # short loop (high note): a plain recursive filter is quickest
+        den = np.zeros(N + 6)
+        den[0] = 1.0
+        den[N:N + 6] = -h
+        y = lfilter([1.0], den, exc)
+    else:
+        # long loop: a block of N samples depends only on samples at least
+        # N earlier, so each block is one vectorised step
+        off = N + 6
+        y = np.zeros(n + off)
+        y[off:] = exc
+        for s in range(off, n + off, N):
+            e = min(s + N, n + off)
+            acc = np.zeros(e - s)
+            for j in range(6):
+                acc += h[j] * y[s - N - j:e - N - j]
+            y[s:e] += acc
+        y = y[off:]
+
+    # the string drives the body through the bridge (its slope, brighter)
+    y = _body(np.diff(y, prepend=0.0) * (period / 6.0), sr, body)
+    if plectrum_noise:                         # the plectrum's tick
+        k = min(int(0.012 * sr), n)
+        level = np.sqrt(np.mean(y[:int(0.05 * sr)] ** 2))
+        tick = rng.standard_normal(k) * np.exp(-np.arange(k) / (0.0015 * sr))
+        y[:k] += plectrum_noise * 3 * level * lfilter([1, -1], [1, -0.6], tick)
+    r = min(int(release * sr), n)              # a hand stops the string
+    y[n - r:] *= np.linspace(1, 0, r) ** 2
+    return y
+
+
+# --- piano ------------------------------------------------------------------
+def _piano_note(freq, dur_s, sr, rng, decay, vel=96, tail=1.4, **_):
+    n = int((max(dur_s, 0.1) + tail) * sr)
+    t = np.arange(n) / sr
+    v = vel / 127.0
+    B = float(np.clip(1.0e-4 * (freq / 220.0) ** 1.2, 4e-5, 3e-3))   # stiffness
+    fc = 900 + 3800 * v ** 2                   # softer felt when played gently
+    tau0 = float(np.clip(2.2 * (261.6 / freq) ** 0.7, 0.35, 7.0)) * 2.5 / decay
+    strings = (-1.1, 0.0, 1.3) if freq > 110 else ((-0.9, 0.9) if freq > 60 else (0.0,))
+    out = np.zeros(n)
+    for k in range(1, 41):
+        fk = freq * k * np.sqrt(1 + B * k * k) / np.sqrt(1 + B)
+        if fk > sr * 0.45:
+            break
+        amp = abs(np.sin(k * np.pi / 8.3)) / k ** 0.7 * np.exp(-fk / fc)  # struck near 1/8
+        if amp < 2e-4:
+            continue
+        tau1 = tau0 / (1 + 0.6 * (fk / 1000.0) ** 1.4)
+        m = min(n, int(4.5 * tau1 * 9.2 * sr))   # until it is 80 dB down
+        tm = t[:m]
+        env = 0.72 * np.exp(-tm / tau1) + 0.28 * np.exp(-tm / (4.5 * tau1))
+        use = strings if k <= 8 else (0.0,)
+        part = np.zeros(m)
+        for c in use:
+            part += np.sin(2 * np.pi * fk * 2 ** (c / 1200) * tm + rng.uniform(0, 2 * np.pi))
+        out[:m] += amp * env * part / len(use)
+    k = min(int(0.03 * sr), n)                 # the hammer's knock
+    knock = rng.standard_normal(k) * np.exp(-np.arange(k) / (0.004 * sr))
+    out[:k] += 0.06 * v * lfilter([0.15], [1, -0.85], knock)
+    atk = max(1, int(0.0015 * sr))
+    out[:atk] *= np.linspace(0, 1, atk)
+    r = min(int(0.12 * sr), n)                 # dampers fall
+    out[n - r:] *= np.linspace(1, 0, r) ** 2
+    return out
+
+
+# --- reed pipe ----------------------------------------------------------------
+_REED_FORMANTS = [(1150, 600, 1.0), (2700, 900, 0.45), (550, 400, 0.4)]
+
+
+def _reed_note(freq, dur_s, sr, rng, decay, release=0.12, **_):
+    ring = max(dur_s, 0.1) + release
+    n = int(ring * sr)
+    t = np.arange(n) / sr
+    scoop = -28 * np.exp(-t / 0.045)           # starts flat, settles
+    vib = 9 * np.clip((t - 0.18) / 0.35, 0, 1) * np.sin(2 * np.pi * 5.0 * t)
+    pts = rng.standard_normal(max(2, int(ring * 4)) + 1) * 3.0
+    drift = np.interp(t, np.linspace(0, ring, len(pts)), pts)   # breath waver
+    phase = 2 * np.pi * np.cumsum(freq * 2 ** ((scoop + vib + drift) / 1200)) / sr
+    out = np.zeros(n)
+    for k in range(1, 31):
+        fk = freq * k
+        if fk >= sr * 0.45:
+            break
+        gain = 0.25 + sum(a / (1 + ((fk - fc) / (bw / 2)) ** 2)
+                          for fc, bw, a in _REED_FORMANTS)
+        out += gain / k ** 0.55 * np.sin(k * phase)
+    noise = rng.standard_normal(n)             # breath, through the pipe
+    for fc, bw, a in _REED_FORMANTS[:2]:
+        b, aa = iirpeak(fc, fc / bw, fs=sr)
+        noise = noise + a * lfilter(b, aa, noise)
+    noise *= 0.03 + 0.10 * np.exp(-t / 0.05)
+    out = out / max(np.abs(out).max(), 1e-9) + noise * 0.25
+    env = np.ones(n)
+    atk = max(1, int(0.04 * sr))
+    env[:atk] = np.linspace(0, 1, atk) ** 1.5
+    stop = min(int(dur_s * sr), n)
+    env[stop:] *= np.exp(-(t[stop:] - t[stop]) / (release / 4))
+    return out * env
+
+
+# --- vibraphone ---------------------------------------------------------------
+def _vibraphone_note(freq, dur_s, sr, rng, decay, vel=96, tail=2.5, **_):
+    n = int((max(dur_s, 0.1) + tail) * sr)
+    t = np.arange(n) / sr
+    v = vel / 127.0
+    out = np.zeros(n)
+    for ratio, amp, tau in [(1, 1.0, 3.5), (4, 0.25 * (0.4 + v), 0.6), (10, 0.06 * v, 0.15)]:
+        f = freq * ratio
+        if f < sr * 0.45:
+            tau *= (440 / freq) ** 0.3 * 2.5 / decay
+            out += amp * np.exp(-t / tau) * np.sin(2 * np.pi * f * t + rng.uniform(0, 2 * np.pi))
+    out *= 1 - 0.35 * (0.5 - 0.5 * np.cos(2 * np.pi * 5.5 * t))   # motor tremolo
+    atk = max(1, int(0.001 * sr))
+    out[:atk] *= np.linspace(0, 1, atk)
+    r = min(int(0.1 * sr), n)
+    out[n - r:] *= np.linspace(1, 0, r) ** 2
+    return out
+
+
+_MODELS = {"string": _string_note, "piano": _piano_note,
+           "reed": _reed_note, "vibraphone": _vibraphone_note}
+
 VOICES = {
     "vibes": dict(program=11),
-    "piano": dict(harmonics=(1, .55, .4, .28, .18, .12, .08, .05), hdecay=.35,
-                  decay_mul=.7, attack=.002, tail=1.6, stretch=.0004, pluck=.02,
-                  program=0),
-    "harp":  dict(harmonics=(1, .5, .28, .14, .07, .04), hdecay=.5, decay_mul=.8,
-                  attack=.003, tail=1.6, pluck=.015, program=46),
+    "piano": dict(model="piano", program=0),
+    # concert harp: plucked a third of the way along the string by a finger,
+    # long-ringing in the bass, a broad soundboard
+    "harp":  dict(model="string", t60_ref=7.0, t60_exp=0.6, t60_min=1.2, t60_max=9.0,
+                  loss=0.13, pluck_at=0.33, finger=0.05, plectrum_noise=0.0, tail=2.6,
+                  body=[(260, 2.0, 0.6), (520, 2.5, 0.35), (1100, 3.0, 0.2)],
+                  program=46),
     "pad":   dict(harmonics=(1, .35, .18, .1, .05), held=True, attack=.35,
                   release=.9, chorus=(-7, 0, 7), vibrato=(.3, .002), program=89),
+    "vibraphone": dict(model="vibraphone", program=11),
     # Ancient Mesopotamian instruments, informed by what is known of them:
     # the lyre (sammûm) the Hurrian hymns were written for, as in the Lyres
-    # of Ur: plucked gut strings, bright onset that dulls fast, some buzz.
-    "lyre":  dict(harmonics=(1, .8, .65, .5, .38, .28, .2, .14, .1), hdecay=.9,
-                  decay_mul=1.1, attack=.001, tail=1.0, stretch=.00015, pluck=.05,
+    # of Ur: gut strings struck with a plectrum near the bridge, so bright
+    # and shorter-lived, over a small wooden box.
+    "lyre":  dict(model="string", t60_ref=4.5, t60_exp=0.5, t60_min=0.6, t60_max=4.0,
+                  loss=0.10, pluck_at=0.13, finger=0.0, plectrum_noise=0.25, tail=1.3,
+                  body=[(210, 3.0, 0.8), (430, 3.5, 0.6), (950, 4.0, 0.35), (2400, 4.0, 0.2)],
                   program=107),     # GM has no lyre; koto is the nearest pluck
     # The reed pipe (embūbum, also the name of a tuning), like the silver
-    # pipes from Ur: a double reed, sustained, buzzy, breathy, with vibrato.
-    "reed":  dict(harmonics=(1, .85, .7, .55, .42, .32, .24, .17, .12, .08),
-                  held=True, attack=.05, release=.12, vibrato=(5.2, .004),
-                  breath=.03, program=111),   # GM shanai, a double reed
+    # pipes from Ur: a double reed, blown, so it settles, wavers and breathes.
+    "reed":  dict(model="reed", program=111),   # GM shanai, a double reed
 }
 
 
-def _voice_note(freq, dur_s, sr, v, decay, rng):
+def _voice_note(freq, dur_s, sr, v, decay, rng, vel=96):
     """One note in a VOICES recipe (any voice except "vibes")."""
+    if "model" in v:
+        note = _MODELS[v["model"]](freq, dur_s, sr, rng, decay, vel=vel, **v)
+        if note is not None:
+            return note
+        v = dict(harmonics=(1, .4, .15), tail=.5)   # beyond the model's range
     held = v.get("held", False)
     ring = max(dur_s, .1) + (v.get("release", .2) if held else v.get("tail", 1.2))
     n = int(ring * sr)
@@ -538,7 +734,7 @@ def _synthesize_voice(notes, beat_sec, sr, decay, v):
     out = np.zeros(total, dtype=np.float64)
     for start_b, dur_b, freq, vel in notes:
         start = int(start_b * beat_sec * sr)
-        note = _voice_note(freq, dur_b * beat_sec, sr, v, decay, rng)
+        note = _voice_note(freq, dur_b * beat_sec, sr, v, decay, rng, vel)
         n = min(len(note), total - start)
         if n <= 8:
             continue
@@ -733,13 +929,14 @@ def build_parser():
                     help="also write the notes as a MIDI file")
     pn.add_argument("--voice", choices=list(VOICES), default="vibes",
                     help="instrument for the WAV: vibes (the original tone), "
-                         "piano, harp, pad, and two ancient Mesopotamian "
-                         "instruments, lyre (sammûm) and reed (embūbum, reed "
-                         "pipe). Synthesized approximations, not recordings")
+                         "piano, harp, vibraphone, pad, and two ancient "
+                         "Mesopotamian instruments, lyre (sammûm) and reed "
+                         "(embūbum, reed pipe). Modelled on the real "
+                         "instruments; synthesized, not recorded")
     pn.add_argument("--program", type=int, default=None,
                     help="General MIDI program for --midi; defaults to the "
-                         "voice's nearest (vibes 11, piano 0, harp 46, pad 89, "
-                         "lyre 107 koto, reed 111 shanai)")
+                         "voice's nearest (vibes and vibraphone 11, piano 0, "
+                         "harp 46, pad 89, lyre 107 koto, reed 111 shanai)")
     pn.add_argument("--verify", action="store_true",
                     help="re-synthesize the transcription and report how much "
                          "of the source's spectral structure survived")

@@ -234,6 +234,42 @@ its own band: the crown at 0.8–3.5 kHz, the grass at 80–140 Hz, the bird at
 gust. Notes from `notate.py` can start up to one grid step before or after
 motion, because it snaps onsets to the beat grid.
 
+### Reading motion: motion lenses
+
+`motion.py read` hands the frames to a **motion lens** (`motion_lenses/`), which
+reads the motion and writes what it found as a short text file beside the WAV.
+Each thing it reads becomes a voice: a gliding tone whose pitch follows it
+(`--sound glide`), or notes on an instrument each time it turns around
+(`--sound notes`, any `notate.py` voice and scale). It reads each frame's real
+time, because security cameras do not record evenly and counting frames
+instead invents rhythms that are not there.
+
+```bash
+python3 motion.py read wind.mp4 turns.wav                     # also writes turns.txt
+python3 motion.py read wind.mp4 turns.wav --sound notes --voice harp --scale nid_qablim
+```
+
+The first lens, `euler`, reads each moving thing as turns about a pivot, after
+Leonhard Euler's rotation theorem (1775): however a rigid body is moved about a
+fixed point, the result is one turn about one axis. One camera sees the flat
+version, a pivot in the picture and an angle. For each mover it reports where
+it is, where it pivots, how much a turn explains its motion compared with a
+slide, how far it swings, its rhythm and when it was busiest. If most of the
+picture moves together it says the camera moved and takes that away first.
+
+On scenes generated with known answers it found every mover's rhythm exactly,
+put pivots within about 5% of the picture (10% at worst) and swings within
+about 30%; a still scene gave nothing and a shaken camera was named as such
+with no movers invented. It lost a swaying branch when the camera shook as
+well. On a five-minute garden camera clip it found the near weed stalk, its
+pivot at the bottom edge where the stalk enters the picture, swinging about
+±1.5° with the gusts and with no steady rhythm; the clock overlay was ignored
+and the treetops moved too little to register at the default 320-pixel width.
+A five-minute clip takes about three minutes.
+
+To write your own, copy `motion_lenses/_example.py`; see
+`motion_lenses/README.md` for the contract.
+
 ## Lenses
 
 A lens reshapes the picture before it becomes sound, or the spectrogram after it
@@ -818,13 +854,18 @@ using.
 
 | flag | default | effect |
 |---|---|---|
-| mode | — | `profile` (real time, height = pitch) or `frames` (each change a whole picture) |
+| mode | — | `profile` (real time, height = pitch), `frames` (each change a whole picture) or `read` (a motion lens reads it; writes NAME.txt) |
 | `--fps` | 15 / 5 | frames per second sampled (profile / frames) |
 | `--box` | whole frame | x,y,w,h in pixels or fractions; only that region |
 | `--start` / `--duration` | whole clip | time range, seconds |
 | `--floor` | 0.03 | brightness change that counts as motion; raise for noisy video |
 | `--width` / `--slot` | 48 / 1.0 | frames mode: columns and seconds per moving step |
-| `--mux` | — | profile mode: write the clip with this sound as its soundtrack |
+| `--mux` | — | profile and read modes: write the clip with this sound as its soundtrack |
+| `--motion-lens` | euler | read mode: which motion lens reads the motion |
+| `--motion-params` | — | read mode: key=value settings for the motion lens |
+| `--sound` | glide | read mode: `glide` (pitch follows each track) or `notes` (a note at each turn) |
+| `--voice` / `--scale` / `--root` | harp / nid_qablim / 220 | read mode, notes: instrument, scale and first note |
+| `--read-width` | 320 | read mode: frame width the lens reads at |
 
 **anomaly.py**
 

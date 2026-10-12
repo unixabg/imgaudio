@@ -20,9 +20,18 @@ Two ways to listen:
             moved are left out. Slower than real time, but decoding the sound
             gives the motion frames back.
 
+  read      read the motion with a motion lens (motion_lenses/) and write
+            what it found as a short text summary beside the WAV. The first
+            lens, euler, reads each moving thing as turns about a pivot, after
+            Euler's rotation theorem: where it pivots, how far it swings, its
+            rhythm. Each thing it reads becomes a voice: a gliding tone
+            (--sound glide) or notes on an instrument (--sound notes).
+
   python3 motion.py profile wind.mp4 wind.wav --mux wind-heard.mp4
   python3 motion.py frames  wind.mp4 wind-frames.wav --fps 5
   python3 motion.py profile wind.mp4 tree.wav --box 0.2,0,0.5,0.6 --start 3 --duration 10
+  python3 motion.py read wind.mp4 turns.wav            # also writes turns.txt
+  python3 motion.py read wind.mp4 turns.wav --sound notes --voice harp --scale nid_qablim
 
 Then make music from only the motion:
   python3 notate.py notes wind.wav wind-music.wav --voice lyre --base 60 --scale nid_qablim
@@ -31,6 +40,7 @@ Needs ffmpeg for reading video (and for --mux).
 """
 
 import argparse
+import importlib
 import json
 import subprocess
 import sys
@@ -41,6 +51,8 @@ import numpy as np
 from PIL import Image
 
 import imgaudio
+
+SR_TRACKS = 22050      # sample rate for read mode's voices
 
 
 # ---------------------------------------------------------------------------
@@ -160,15 +172,187 @@ def mux(video, sound, out, start, duration):
     print(f"video with motion soundtrack: {out}")
 
 
+# ---------------------------------------------------------------------------
+# Read mode: motion lenses
+# ---------------------------------------------------------------------------
+def load_motion_lenses():
+    """Every .py in motion_lenses/ (except those starting with _) that
+    defines NAME and read(frames, times, params)."""
+    here = Path(__file__).resolve().parent
+    found = {}
+    if not (here / "motion_lenses").is_dir():
+        return found
+    sys.path.insert(0, str(here))
+    for path in sorted((here / "motion_lenses").glob("*.py")):
+        if path.name.startswith("_"):
+            continue
+        try:
+            mod = importlib.import_module(f"motion_lenses.{path.stem}")
+            found[getattr(mod, "NAME", path.stem)] = mod
+        except Exception as e:
+            print(f"warning: failed to load motion lens {path.name}: {e}", file=sys.stderr)
+    return found
+
+
+def read_frames_timed(path, width, box=None, start=0.0, duration=None, fps=None):
+    """Greyscale frames as (n, rows, cols) uint8, with each frame's real time
+    in seconds. Security cameras do not record evenly, and counting frames
+    instead of reading their times invents rhythms that are not there."""
+    filters = [f"fps={fps}"] if fps else []
+    if box:
+        x, y, w, h = box
+        filters.append(f"crop={w}:{h}:{x}:{y}")
+    filters += [f"scale={width}:-2:flags=area", "format=gray", "showinfo"]
+    cmd = ["ffmpeg", "-hide_banner", "-v", "info", "-ss", str(start)]
+    if duration:
+        cmd += ["-t", str(duration)]
+    cmd += ["-i", path, "-vf", ",".join(filters), "-fps_mode", "passthrough",
+            "-f", "rawvideo", "-"]
+    r = subprocess.run(cmd, capture_output=True, check=True)
+    times = [float(l.split("pts_time:")[1].split()[0])
+             for l in r.stderr.decode(errors="replace").splitlines() if "pts_time:" in l]
+    n = len(times)
+    if n < 2:
+        raise SystemExit("fewer than two frames in that range; nothing can move")
+    rows = len(r.stdout) // (n * width)
+    frames = np.frombuffer(r.stdout, np.uint8)[: n * rows * width].reshape(n, rows, width)
+    return frames, np.asarray(times) + start
+
+
+GLIDE_CENTRES = [220.0, 329.63, 146.83, 440.0, 110.0, 293.66]   # A3 E4 D3 A4 A2 D4
+_NOTE = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+
+
+def _name(hz):
+    m = int(round(69 + 12 * np.log2(hz / 440.0)))
+    return f"{_NOTE[m % 12]}{m // 12 - 1}"
+
+
+def glide_voice(t, value, size, centre, n, t0, semis=7):
+    """A tone whose pitch follows the track (plus or minus size -> plus or
+    minus semis semitones) and whose loudness follows how fast it changes,
+    so a still track is silent."""
+    ta = t0 + np.arange(n) / SR_TRACKS
+    a = np.interp(ta, t, value)
+    f = centre * 2 ** (np.clip(a / size, -1.5, 1.5) * semis / 12)
+    ph = 2 * np.pi * np.cumsum(f) / SR_TRACKS
+    tone = np.sin(ph) + 0.4 * np.sin(2 * ph) + 0.15 * np.sin(3 * ph)
+    k = max(1, int(0.15 * SR_TRACKS))
+    speed = np.convolve(np.abs(np.gradient(a)) * SR_TRACKS, np.ones(k) / k, "same")
+    top = np.percentile(speed, 98)
+    return tone * np.clip(speed / top if top > 0 else speed * 0, 0, 1.2) ** 0.8
+
+
+def track_notes(t, value, size, root, ratios, t0, span_oct=1.5):
+    """A note each time the track turns around. Its pitch comes from how far
+    it had swung (snapped to the scale's ratios over the root) and its
+    loudness from how big that swing was. Notes are (start s, 0.5, Hz, vel)."""
+    import notate
+    hop = 0.05
+    tt = np.arange(t[0], t[-1], hop)
+    a = np.interp(tt, t, value)
+    notes = []
+    for i in range(1, len(a) - 1):
+        if (a[i] - a[i - 1]) * (a[i + 1] - a[i]) >= 0:
+            continue                                     # still going the same way
+        lo, hi = max(0, i - 40), min(len(a), i + 40)
+        depth = abs(a[i] - np.median(a[lo:hi]))
+        if depth < 0.15 * size:
+            continue
+        hz = root * 2 ** (np.clip(a[i] / size, -1.2, 1.2) * span_oct / 1.2 * 0.5 + 0.5)
+        notes.append((tt[i] - t0, 0.5, notate.snap_to_ratio(hz, root, ratios),
+                      int(np.clip(60 + 60 * depth / size, 50, 120))))
+    return notes
+
+
+def read_mode(args, width, height, box):
+    import notate
+    lenses = load_motion_lenses()
+    lens = lenses.get(args.motion_lens)
+    if lens is None:
+        raise SystemExit(f"unknown motion lens '{args.motion_lens}'. available: {sorted(lenses)}")
+    frames, times = read_frames_timed(args.video, args.read_width, box, args.start,
+                                      args.duration, args.fps)
+    gaps = np.diff(times)
+    print(f"  {len(frames)} frames at {frames.shape[2]}x{frames.shape[1]}, "
+          f"{times[-1] - times[0]:.1f} s; reading with {lens.NAME}")
+    found = lens.read(frames, times, imgaudio._parse_lens_params(args.motion_params))
+    tracks = found.get("tracks", [])
+
+    # sound: every track a voice, as long as the clip
+    t0, t1 = times[0], times[-1]
+    n = int((t1 - t0) * SR_TRACKS)
+    mix = np.zeros(n)
+    voices = []
+    if args.sound == "glide":
+        for i, tr in enumerate(tracks):
+            c = GLIDE_CENTRES[i % len(GLIDE_CENTRES)]
+            mix += glide_voice(np.asarray(tr["t"]), np.asarray(tr["value"]), tr["size"], c, n, t0)
+            voices.append(f"{tr['name']}: gliding tone around {_name(c)} ({c:.0f} Hz)")
+    else:
+        if args.scale in notate.RATIO_SCALES:
+            ratios = notate.RATIO_SCALES[args.scale]
+        elif args.scale in notate.SCALES:
+            ratios = [2 ** (s / 12) for s in notate.SCALES[args.scale]]
+        else:
+            raise SystemExit(f"unknown scale '{args.scale}'; see: python3 notate.py scales")
+        for i, tr in enumerate(tracks):
+            root = args.root * 2 ** [0, 1, -1, 2][i % 4]
+            notes = track_notes(np.asarray(tr["t"]), np.asarray(tr["value"]), tr["size"],
+                                root, ratios, t0)
+            if notes:
+                y = notate.synthesize(notes, 60, sr=SR_TRACKS, voice=args.voice)[:n]
+                mix[:len(y)] += y
+            voices.append(f"{tr['name']}: {len(notes)} {args.voice} notes in {args.scale} "
+                          f"from {_name(root)} ({root:.0f} Hz)")
+    peak = np.abs(mix).max()
+    if peak > 0:
+        mix = mix / peak * 0.85
+    f = min(int(0.05 * SR_TRACKS), n // 4)
+    if f:
+        mix[:f] *= np.linspace(0, 1, f)
+        mix[-f:] *= np.linspace(1, 0, f)
+    imgaudio.wavfile.write(args.output, SR_TRACKS, (mix * 32767).astype(np.int16))
+
+    # text summary
+    skips = [(times[i], gaps[i]) for i in np.where(gaps > max(0.5, 4 * np.median(gaps)))[0]]
+    head = [f"{Path(args.video).name}: motion read by motion.py read --motion-lens {lens.NAME}",
+            f"segment: {t0:.2f} to {t1:.2f} s, {len(frames)} frames read at "
+            f"{frames.shape[2]}x{frames.shape[1]}"
+            + (f", box {box[2]}x{box[3]} at ({box[0]},{box[1]}) of {width}x{height}" if box else
+               f" (from {width}x{height})")
+            + f"; frames {np.min(gaps):.2f} to {np.max(gaps):.2f} s apart",
+            f"lens: {lens.NAME}: {getattr(lens, 'DESCRIPTION', '')}"]
+    if skips:
+        head.append("the camera skipped frames at "
+                    + ", ".join(f"{int(a // 60)}:{a % 60:04.1f} ({g:.1f} s)" for a, g in skips[:8]))
+    unit = getattr(lens, "UNIT", "")
+    body = list(found.get("lines", []))
+    snd = ([f"sound: {Path(args.output).name}, {(t1 - t0):.1f} s, one voice per track"
+            + (" (pitch follows the value, plus or minus a typical swing = plus or minus "
+               "7 semitones; loudness follows how fast it changes)" if args.sound == "glide" else
+               " (a note each time a track turns around; pitch from how far it swung)")]
+           + [f"  {v}; typical swing ±{tr['size']:.2g} {unit}".rstrip()
+              for v, tr in zip(voices, tracks)])
+    if not tracks:
+        snd = ["sound: silent, nothing to voice"]
+    txt = Path(args.output).with_suffix(".txt")
+    txt.write_text("\n".join(head + [""] + body + [""] + snd) + "\n")
+    print(f"wrote {args.output} and {txt}")
+    if args.mux:
+        mux(args.video, args.output, args.mux, args.start, args.duration)
+
+
 def main(argv=None):
     class _Fmt(argparse.RawDescriptionHelpFormatter,
                argparse.ArgumentDefaultsHelpFormatter):
         pass
 
     p = argparse.ArgumentParser(description=__doc__, formatter_class=_Fmt)
-    p.add_argument("mode", choices=["profile", "frames"],
+    p.add_argument("mode", choices=["profile", "frames", "read"],
                    help="profile: real time, height = pitch; frames: every "
-                        "changed frame as its own small picture (see above)")
+                        "changed frame as its own small picture; read: a motion "
+                        "lens reads the motion and writes a text summary (see above)")
     p.add_argument("video", help="any video ffmpeg can read")
     p.add_argument("output", help="WAV to write")
     p.add_argument("--fps", type=float, default=None,
@@ -194,7 +378,7 @@ def main(argv=None):
                         "--floor already removes camera noise)")
     p.add_argument("--png", default=None, help="also save the motion picture here")
     p.add_argument("--mux", default=None,
-                   help="profile mode: write the clip with this sound as its soundtrack")
+                   help="profile and read modes: write the clip with this sound as its soundtrack")
     p.add_argument("--lens", default="raw",
                    help="imgaudio lens applied to the motion picture before "
                         "encoding (raw, edges, reveal, ...; see imgaudio.py -h)")
@@ -211,11 +395,36 @@ def main(argv=None):
     p.add_argument("--gamma", type=float, default=1.0,
                    help="contrast of the motion picture; 1.0 keeps loudness "
                         "proportional to how much moved")
+    lenses = load_motion_lenses()
+    p.add_argument("--motion-lens", default="euler",
+                   help="read mode: how to read the motion. "
+                        + "; ".join(f"{k}: {getattr(m, 'DESCRIPTION', '')}"
+                                    for k, m in sorted(lenses.items())))
+    p.add_argument("--motion-params", default="",
+                   help="read mode: comma-separated key=value settings for the motion lens")
+    p.add_argument("--sound", choices=["glide", "notes"], default="glide",
+                   help="read mode: each track as a gliding tone (pitch follows it), "
+                        "or as notes on --voice each time it turns around")
+    p.add_argument("--voice", default="harp",
+                   help="read mode, --sound notes: any notate.py instrument "
+                        "(harp, lyre, piano, reed, vibraphone, vibes, pad)")
+    p.add_argument("--scale", default="nid_qablim",
+                   help="read mode, --sound notes: any scale from "
+                        "'python3 notate.py scales' (base 60 tunings included)")
+    p.add_argument("--root", type=float, default=220.0,
+                   help="read mode, --sound notes: the scale's first note, Hz")
+    p.add_argument("--read-width", type=int, default=320,
+                   help="read mode: frame width the lens reads at, in pixels")
     args = p.parse_args(argv)
 
     width, height, length = probe(args.video)
     box = parse_box(args.box, width, height) if args.box else None
     bw, bh = (box[2], box[3]) if box else (width, height)
+    if args.mode == "read":
+        print(f"{args.video}: {width}x{height}, {length:.1f}s"
+              + (f"; box {box[2]}x{box[3]} at ({box[0]},{box[1]})" if box else ""))
+        read_mode(args, width, height, box)
+        return
     fps = args.fps or (15.0 if args.mode == "profile" else 5.0)
     rows = args.rows
     cols = max(8, round(rows * bw / bh)) if args.mode == "profile" else args.width

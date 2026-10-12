@@ -389,6 +389,428 @@ def annotated_path(image_path):
 
 
 # ---------------------------------------------------------------------------
+# Text annotation — the same sound described in words
+# ---------------------------------------------------------------------------
+# A picture costs a reader far more to take in than a few lines of text that
+# say the same thing. This finds the notes in the sound and writes them out:
+# when each starts, its name, its pitch in Hz and how far that is from equal
+# temperament, plus one line on what kind of sound it is. It reads the audio
+# itself, with longer windows than the picture uses, so its pitches are finer
+# than the picture's bands (a few cents rather than about a semitone low down).
+#
+# How the notes are found:
+#   1. Every 23 ms, list the peaks of the spectrum (a 0.19 s window; 0.37 s
+#      below 160 Hz, where neighbouring semitones are only a few Hz apart).
+#   2. In each frame pick fundamentals one at a time: the peak whose overtone
+#      series (x1, x2, x3 ...) is strongest, preferring a fundamental to one of
+#      its own overtones; then take that series away and look again. An
+#      overtone shared with another note keeps whatever is left over, so the
+#      upper note of a fifth is not lost in the lower note's overtones.
+#   3. Join each pitch from frame to frame into a track.
+#   4. A track starts where its own pitch first rises, timed with a short
+#      window; a track that rises again sharply at an onset is a new note at
+#      the same pitch (struck again).
+#   5. Drop what is left of overtones, quiet companions and duplicates.
+
+FUND_LO = 30.0        # Hz: lowest fundamental looked for, whatever the picture shows
+
+
+def _peaks(col, freqs, floor):
+    """Peaks of one spectrum column: (Hz, amplitude), refined between bins."""
+    db = 20 * np.log10(col + 1e-12)
+    i = np.where((col[1:-1] > col[:-2]) & (col[1:-1] >= col[2:])
+                 & (col[1:-1] > floor))[0] + 1
+    a, b, c = db[i - 1], db[i], db[i + 1]
+    den = a - 2 * b + c
+    p = np.where(den != 0, 0.5 * (a - c) / np.where(den == 0, 1, den), 0.0)
+    return freqs[i] + p * (freqs[1] - freqs[0]), 10 ** ((b - 0.25 * (a - c) * p) / 20)
+
+
+def _fundamentals(pf, pa, f_lo, f_hi, rel=0.06, max_notes=6, nh=40, n_score=12,
+                  max_cands=30):
+    """Fundamentals in one frame's peaks, strongest first: [(Hz, strength)]."""
+    order = np.argsort(pf)
+    pf, amp = pf[order], pa[order].copy()
+    lpf = np.log2(pf)
+    inr = np.where((pf >= f_lo) & (pf <= f_hi))[0]
+    if not len(inr):
+        return []
+    cand = inr[np.argsort(-amp[inr])[:max_cands]]
+    c = pf[cand]
+    h = np.arange(1, nh + 1)
+    target = np.log2(c[:, None] * h[None, :])
+    pos = np.clip(np.searchsorted(lpf, target), 1, len(lpf) - 1)
+    near = np.where(np.abs(lpf[pos - 1] - target) < np.abs(lpf[pos] - target), pos - 1, pos)
+    # within ~36 cents, a little wider for stiff strings, never reaching the next overtone
+    ok = np.abs(lpf[near] - target) < np.minimum(0.03 + 0.004 * h, 0.6 / h)
+    w = ok / np.sqrt(h) * (h <= n_score)          # judge by the first dozen, remove all
+    alive = np.ones(len(c), bool)
+    out, first = [], None
+    for _ in range(max_notes):
+        sc = (amp[near] * w).sum(axis=1) * alive * (amp[cand] > 0)
+        bi = int(np.argmax(sc))
+        best_s = sc[bi]
+        if best_s <= 0:
+            break
+        # an overtone can outscore its own fundamental: prefer the fundamental
+        # if it has strength of its own, not just the overtone's
+        for ci in np.argsort(c):
+            if c[ci] >= c[bi] or sc[ci] < 0.4 * best_s:
+                continue
+            r = c[bi] / c[ci]
+            k = int(round(r))
+            if 2 <= k <= 4 and abs(r - k) < 0.02:
+                if (amp[near[ci]] * w[ci] * (h % k != 0)).sum() >= 0.25 * best_s:
+                    bi, best_s = ci, sc[ci]
+                    break
+        first = best_s if first is None else first
+        if best_s < rel * first:
+            break
+        out.append((float(c[bi]), float(best_s)))
+        alive[bi] = False
+        # take its overtones away; a shared one keeps what its neighbours
+        # in the series don't explain
+        ks = near[bi]
+        a = amp[ks].copy()
+        for i in np.where(ok[bi])[0]:
+            if i == 0:
+                amp[ks[0]] = 0.0
+                continue
+            nb = [a[x] for x in (i - 1, i + 1) if 0 <= x < nh and ok[bi, x]]
+            expect = max(nb) * 3.0 if nb else a[i]
+            amp[ks[i]] = a[i] - expect if a[i] > expect else 0.0
+    return out
+
+
+def find_notes(audio, sr, f_hi=8000.0):
+    """The notes in a sound: a list of dicts with t0 (start, s), t1 (last
+    heard, s), midi (fractional), spread (cents), and loudness and timing
+    details used to describe the sound's character."""
+    x = np.asarray(audio, dtype=np.float64)
+    f_hi = min(f_hi, sr * 0.45)
+    N = 1 << int(np.ceil(np.log2(0.17 * sr)))     # 4096 at 22.05 kHz
+    hop = N // 8
+    pad = N                                       # silence each side: edges get whole windows
+    x = np.concatenate([np.zeros(pad), x, np.zeros(pad)])
+    f, t, Z = stft(x, fs=sr, nperseg=N, noverlap=N - hop, nfft=2 * N,
+                   window="hann", boundary=None, padded=False)
+    M = np.abs(Z)
+    if M.max() <= 0:
+        return [], None
+    tc = t - pad / sr
+    split = 160.0                                 # below this, use the long window
+    f2, _, Z2 = stft(np.concatenate([np.zeros(N // 2), x]), fs=sr, nperseg=2 * N,
+                     noverlap=2 * N - hop, nfft=4 * N, window="hann",
+                     boundary=None, padded=False)
+    M2 = np.abs(Z2)
+    gfloor = M.max() * 10 ** (-55 / 20)
+
+    frames = []
+    for j in range(M.shape[1]):
+        col = M[:, j]
+        floor = max(gfloor, col.max() * 10 ** (-45 / 20))
+        pf, pa = _peaks(col, f, floor)
+        if j < M2.shape[1]:
+            qf, qa = _peaks(M2[:, j], f2, floor)
+            hi = pf >= split
+            pf = np.concatenate([qf[qf < split], pf[hi]])
+            pa = np.concatenate([qa[qf < split], pa[hi]])
+        keep = pf > 0
+        frames.append(_fundamentals(pf[keep], pa[keep], FUND_LO, f_hi) if keep.any() else [])
+
+    # join frames into tracks; a pitch may drop out for a few frames
+    tracks, active = [], []
+    for j, fl in enumerate(frames):
+        used = set()
+        for f0, s in sorted(fl, key=lambda z: -z[1]):
+            m = 69 + 12 * np.log2(f0 / 440.0)
+            cand = [tr for tr in active if id(tr) not in used
+                    and abs(np.median(tr["m"][-6:]) - m) < 0.45]
+            if cand:
+                tr = min(cand, key=lambda tr: (j - tr["last"],
+                                               abs(np.median(tr["m"][-6:]) - m)))
+            else:
+                tr = dict(j=[], m=[], s=[], last=j)
+                tracks.append(tr)
+                active.append(tr)
+            tr["j"].append(j); tr["m"].append(m); tr["s"].append(s); tr["last"] = j
+            used.add(id(tr))
+        active = [tr for tr in active if j - tr["last"] <= 6]
+
+    # onsets of any note, from a short window
+    Ns = 512
+    _, ts, Zs = stft(x, fs=sr, nperseg=Ns, noverlap=Ns - 128, window="hann",
+                     boundary=None, padded=False)
+    bb = np.maximum(np.diff(np.log(np.abs(Zs) + 1e-4), axis=1), 0).sum(axis=0)
+    tb = ts[1:] - pad / sr
+    thr = np.median(bb) + 3 * np.std(bb)
+    onsets = tb[[i for i in range(1, len(bb) - 1)
+                 if bb[i] > thr and bb[i] >= bb[i - 1] and bb[i] >= bb[i + 1]]]
+
+    # each pitch's own loudness, from a medium window, to time its onsets
+    Nm, lag = 2048 * N // 4096, 8
+    fm, tm, Zm = stft(x, fs=sr, nperseg=Nm, noverlap=Nm - Nm // 16, nfft=2 * Nm,
+                      window="hann", boundary=None, padded=False)
+    Mm = np.abs(Zm)
+    tm = tm - pad / sr
+
+    def rise_at_pitch(f0):
+        rows = []
+        for hh in (1, 2):
+            sel = np.where(np.abs(np.log2(fm / (f0 * hh) + 1e-12)) < 0.025)[0]
+            if not len(sel):
+                sel = [int(np.argmin(np.abs(fm - f0 * hh)))]
+            rows.append(Mm[sel].max(axis=0))
+        e = np.log(rows[0] + 0.5 * rows[1] + 1e-4)
+        r = np.zeros_like(e)
+        r[lag:-lag] = e[2 * lag:] - e[:-2 * lag]  # a rise across half a window, not a wobble
+        return np.maximum(r, 0), e
+
+    def snap(t0):
+        if len(onsets):
+            k = int(np.argmin(np.abs(onsets - t0)))
+            if abs(onsets[k] - t0) < 0.06:
+                return float(onsets[k])
+        return float(t0)
+
+    lead = 0.6 * N / sr
+    notes = []
+    for tr in tracks:
+        js, ms, ss = map(np.asarray, (tr["j"], tr["m"], tr["s"]))
+        if len(js) < 3:
+            continue
+        f0 = 440 * 2 ** ((np.median(ms) - 69) / 12)
+        rise, level = rise_at_pitch(f0)
+        tf = tc[js]
+
+        def start_in(a, b):
+            sel = np.where((tm >= a) & (tm <= b))[0]
+            if not len(sel):
+                return a, 0.0
+            i = sel[int(np.argmax(rise[sel]))]
+            top = rise[i]
+            while i > sel[0] and rise[i - 1] >= 0.5 * top:     # back to where it began
+                i -= 1
+            return tm[min(i + lag, len(tm) - 1)], top
+
+        # the first frame to hear the note may be centred up to half a window early
+        half = (N if f0 < split else N / 2) / sr
+        t_start, _ = start_in(tf[0] - lead, tf[0] + half)
+
+        def swells(t0):
+            """The note itself gets louder, not a neighbour leaking in."""
+            after = ss[(tf >= t0) & (tf <= t0 + 0.3)]
+            before = ss[(tf >= max(t0 - 0.3, t_start + 0.3)) & (tf < t0)]
+            return len(after) and len(before) and after.max() > 1.4 * before.min()
+
+        starts = [t_start]
+        for i in np.where((tm > t_start + 0.12) & (tm < tf[-1]))[0]:
+            if (rise[i] >= 0.45 and rise[i] == rise[max(0, i - 6):i + 7].max()
+                    and len(onsets) and np.min(np.abs(onsets - tm[i])) < 0.04
+                    and tm[i] - starts[-1] > 0.12 and swells(tm[i])):
+                starts.append(tm[i])                    # struck again
+        starts.append(np.inf)
+        for a, b in zip(starts[:-1], starts[1:]):
+            k = np.where((tf >= a - lead) & (tf < b - lead * 0.5))[0]
+            if len(k) < 2:
+                continue
+            seg_s, seg_m = ss[k], ms[k]
+            loud = seg_s >= seg_s.max() * 0.3
+            mm = seg_m[loud]
+            ipk = int(np.argmax(seg_s))
+            t0 = max(0.0, snap(a))
+            notes.append(dict(
+                t0=t0, t1=float(tf[k[-1]]), midi=float(np.median(mm)),
+                spread=float(np.percentile(mm, 75) - np.percentile(mm, 25)) * 50,
+                peak=float(seg_s.max()), tpk=float(tf[k[ipk]]), jpk=int(js[k[ipk]])))
+
+    notes = [n for n in notes if n["t1"] >= n["t0"] + 0.06]    # crumbs of a ringing note
+    if notes:
+        top = max(n["peak"] for n in notes)
+
+        def loudest_at(n):
+            return max(o["peak"] for o in notes
+                       if o["t0"] - 0.1 <= n["tpk"] <= o["t1"] + 1e-9)
+        notes = [n for n in notes
+                 if n["peak"] > top * 0.03 and n["peak"] > 0.15 * loudest_at(n)]
+
+    def overtone_of_another(n):
+        for o in notes:
+            r = 2 ** ((n["midi"] - o["midi"]) / 12)
+            k = round(r)
+            if (o is not n and 2 <= k <= 8 and abs(1200 * np.log2(r / k)) < 40
+                    and o["t0"] - 0.1 < n["t0"] < o["t1"]
+                    and n["peak"] < (0.8 if k == 2 else 0.5) * o["peak"]):
+                return True
+        return False
+    notes = [n for n in notes if not overtone_of_another(n)]
+    # one note found twice, or a faint shadow a semitone beside a note that
+    # starts with it (a tremolo's sidebands): keep the louder
+    kept = []
+    for n in sorted(notes, key=lambda n: -n["peak"]):
+        if not any(abs(n["t0"] - o["t0"]) < 0.06 and
+                   (abs(n["midi"] - o["midi"]) < 0.4 or
+                    (abs(n["midi"] - o["midi"]) < 1.5 and n["peak"] < 0.6 * o["peak"]))
+                   for o in kept):
+            kept.append(n)
+    kept.sort(key=lambda n: (round(n["t0"], 2), n["midi"]))
+
+    # attack and decay, from the finer-timed level at each note's pitch, up to
+    # the next note's start (where a held note may stop) or one second
+    starts = np.array([n["t0"] for n in kept])
+    for n in kept:
+        n["attack"] = n["decay"] = None
+        f0 = 440 * 2 ** ((n["midi"] - 69) / 12)
+        # several overtones together, so the beating of a chorused tone evens out
+        hs = [hh for hh in range(1, 7) if f0 * hh < fm[-1]]
+        level = np.log(sum(Mm[np.abs(np.log2(fm / (f0 * hh) + 1e-12)) < 0.025].max(axis=0)
+                           if (np.abs(np.log2(fm / (f0 * hh) + 1e-12)) < 0.025).any()
+                           else Mm[int(np.argmin(np.abs(fm - f0 * hh)))]
+                           for hh in hs) + 1e-4)
+        nxt = starts[starts > n["t0"] + 0.1]
+        # a last note may be let go at any moment, so judge its decay only if alone
+        end = min(nxt[0] - 0.1 if len(nxt) else (np.inf if len(kept) == 1 else n["t0"]),
+                  n["t0"] + 1.0, n["t1"] + 0.1)
+        end_att = min(nxt[0] if len(nxt) else np.inf, n["t0"] + 1.0, n["t1"] + 0.1)
+        wa = np.where((tm >= n["t0"]) & (tm <= end_att))[0]
+        if len(wa) > 3:
+            n["attack"] = float(tm[wa[int(np.argmax(level[wa]))]] - n["t0"])
+        w = np.where((tm >= n["t0"]) & (tm <= end))[0]
+        if len(w) > 3:
+            ip = w[int(np.argmax(level[w]))]
+            d = w[w >= ip][: int(0.5 * sr / (Nm // 16))]
+            if len(d) and tm[d[-1]] - tm[d[0]] >= 0.25:     # long enough to judge
+                n["decay"] = float(np.polyfit(tm[d], level[d], 1)[0] * 20 / np.log(10))
+    return kept, dict(M=M, f=f, tc=tc)
+
+
+def _character(notes, spec):
+    """One line on what kind of sound it is: how notes begin and end, how
+    many overtones they carry, how much noise lies between them, and how
+    steady the pitch is."""
+    if not notes:
+        return "no notes found"
+    M, f, tc = spec["M"], spec["f"], spec["tc"]
+    parts = []
+
+    # how notes begin and what they do after their peak
+    attacks = [n["attack"] for n in notes if n["attack"] is not None]
+    decays = [n["decay"] for n in notes if n["decay"] is not None]
+    att = float(np.median(attacks)) if attacks else None
+    dec = float(np.median(decays)) if decays else None
+    if att is not None and dec is not None:
+        if att < 0.1 and dec < -12:
+            parts.append("struck or plucked")
+        elif att < 0.1 and dec < -6:
+            parts.append("struck or plucked, ringing on")
+        elif dec > -4:
+            parts.append("held, like a blown or bowed note")
+    if att is not None:
+        word = "sharp" if att < 0.1 else "soft" if att < 0.25 else "slow"
+        parts.append(f"{word} attack ({att:.2f} s to full loudness)")
+    if dec is not None:
+        word = ("die away quickly" if dec < -12 else "fade slowly" if dec < -4
+                else "stay level")
+        parts.append(f"after it notes {word} ({dec:.0f} dB per second)")
+
+    # brightness: overtones within 30 dB of the strongest, at each note's peak
+    counts = []
+    for n in notes:
+        col = M[:, n["jpk"]]
+        f0 = 440 * 2 ** ((n["midi"] - 69) / 12)
+        amps = []
+        for h in range(1, 21):
+            if f0 * h >= f[-1]:
+                break
+            sel = np.abs(np.log2((f + 1e-9) / (f0 * h))) < 0.02
+            amps.append(col[sel].max() if sel.any() else 0.0)
+        amps = np.asarray(amps)
+        if amps.size and amps.max() > 0:
+            counts.append(int((amps >= amps.max() * 10 ** (-30 / 20)).sum()))
+    if counts:
+        c = int(np.median(counts))
+        word = "dark" if c <= 3 else "bright" if c >= 9 else "medium"
+        parts.append(f"{word} tone ({c} overtones within 30 dB)")
+
+    # noise: share of energy not on any sounding note's overtones
+    df = f[1] - f[0]
+    on = off = 0.0
+    for j in range(0, M.shape[1], 2):
+        sounding = [n for n in notes if n["t0"] <= tc[j] <= n["t1"]]
+        if not sounding:
+            continue
+        p = M[:, j] ** 2
+        mask = np.zeros(len(f), bool)
+        for n in sounding:
+            f0 = 440 * 2 ** ((n["midi"] - 69) / 12)
+            for h in range(1, 41):
+                fh = f0 * h
+                if fh >= f[-1]:
+                    break
+                mask |= np.abs(f - fh) <= max(0.015 * fh, 3 * df)
+        band = (f >= FUND_LO)
+        on += p[mask & band].sum()
+        off += p[~mask & band].sum()
+    if on + off > 0:
+        noise = 100 * off / (on + off)
+        word = "clean" if noise < 5 else "some noise" if noise < 20 else "noisy"
+        parts.append(f"{word} ({noise:.0f}% of the energy lies between the notes' overtones)")
+        if noise >= 40:
+            parts.append("much of it may not be notes at all, so read the list with care")
+
+    # steadiness of pitch
+    wob = float(np.median([n["spread"] for n in notes]))
+    parts.append("steady pitch" if wob < 3 else f"pitch wavers about ±{wob:.0f} cents (vibrato or drift)")
+    return "; ".join(parts)
+
+
+def annotate_text(audio, sr, out_path, *, name, f_lo, f_hi, scale="log",
+                  t_first=None, t_last=None, pictures=()):
+    """Write NAME.annotated.txt: the notes of a sound in plain text."""
+    notes, spec = find_notes(audio, sr)
+    dur = len(audio) / sr
+    lines = [f"{name}: notes found in the sound by imgaudio.py --annotate-text"]
+    lines.append(f"sound: {dur:.2f} s at {sr} Hz; {len(notes)} notes; "
+                 + _character(notes, spec))
+    if pictures:
+        scale_txt = ("log scale, each octave the same height" if scale != "linear"
+                     else "linear scale, each Hz the same height")
+        lines.append(
+            f"picture: {' and '.join(pictures)} {'show' if len(pictures) > 1 else 'shows'} "
+            f"the same sound: time runs left to "
+            f"right from {t_first:.2f} to {t_last:.2f} s; pitch runs bottom to top from "
+            f"{f_lo:g} to {f_hi:g} Hz ({scale_txt}). A note is a stack of lines; its "
+            "pitch is the lowest line of the stack, read at the middle of its band.")
+    lines.append("how to read: one line per note, in order of starting time; notes that "
+                 "start together are a chord. Overtones are not listed. Cents are "
+                 "hundredths of a semitone away from the named equal-tempered note "
+                 "(+ sharp, - flat), with how sure the pitch is (±).")
+    lines.append("")
+    lines.append("start s   lasts s  note   Hz        cents")
+    for n in notes:
+        m = n["midi"]
+        k = int(round(m))
+        hz = 440 * 2 ** ((m - 69) / 12)
+        cents = int(round(100 * (m - k))) + 0          # no "-0"
+        sure = max(2, int(round(n["spread"])))
+        where = ("  (below the picture)" if hz < f_lo else
+                 "  (above the picture)" if hz > f_hi else "")
+        lines.append(f"{n['t0']:7.2f}   {n['t1'] - n['t0']:6.2f}  "
+                     f"{_NOTE_NAMES[k % 12] + str(k // 12 - 1):5s}  {hz:8.1f}  "
+                     f"{cents:+4d} ±{sure}{where}")
+    if not notes:
+        lines.append("(none)")
+    Path(out_path).write_text("\n".join(lines) + "\n")
+    return out_path
+
+
+def annotated_text_path(image_path):
+    """look.png -> look.annotated.txt"""
+    p = Path(image_path)
+    return p.with_name(p.stem + ".annotated.txt")
+
+
+# ---------------------------------------------------------------------------
 # Encoder
 # ---------------------------------------------------------------------------
 def encode(image_path, audio_path, *, sr, rows, cols, f_lo, f_hi, col_sec,
@@ -489,7 +911,8 @@ def encode(image_path, audio_path, *, sr, rows, cols, f_lo, f_hi, col_sec,
 # ---------------------------------------------------------------------------
 def decode(audio_path, image_path, *, sr, rows, cols, f_lo, f_hi,
            lossless=False, color=False, lens="raw", lens_params=None,
-           palette="grey", freq_scale="log", annotate_out=False, **_):
+           palette="grey", freq_scale="log", annotate_out=False,
+           annotate_text_out=False, **_):
     """Recover the image from the audio via STFT magnitude, or raw-byte decode."""
     if lossless:
         # Raw byte mode: WAV samples ARE the image bytes. Strip header, write file.
@@ -590,6 +1013,16 @@ def decode(audio_path, image_path, *, sr, rows, cols, f_lo, f_hi,
                                    and not (color and sidecar.exists())),
                        title=Path(audio_path).name)
         print(f"annotated: {out}  (rulers for reading; re-encode the plain picture)")
+
+    if annotate_text_out:
+        pics = [Path(image_path).name]
+        if annotate_out:
+            pics.append(annotated_path(image_path).name)
+        out = annotate_text(audio, sr, annotated_text_path(image_path),
+                            name=Path(audio_path).name, f_lo=f_lo, f_hi=f_hi,
+                            scale=freq_scale, t_first=(nperseg / 2) / sr,
+                            t_last=(len(audio) - nperseg / 2) / sr, pictures=pics)
+        print(f"annotated: {out}  (the notes in words)")
 
 
 # ---------------------------------------------------------------------------
@@ -737,6 +1170,12 @@ def build_parser():
                    help="decode only: also write NAME.annotated.png with a time "
                         "ruler, a frequency ruler and note names, for reading the "
                         "picture precisely. The plain picture is unchanged")
+    p.add_argument("--annotate-text", action="store_true",
+                   help="decode only: also write NAME.annotated.txt listing the "
+                        "notes in the sound (start, name, Hz, cents) and what "
+                        "kind of sound it is, in a few lines of plain text. "
+                        "Cheaper for a reader than the picture; works with or "
+                        "without --annotate")
     p.add_argument("--palette", choices=["grey", "octave"], default="grey",
                    help="decode only: 'octave' colours each pitch by raising "
                         "it by octaves into visible light, so every sound "
@@ -755,7 +1194,8 @@ def build_parser():
 
     pd = sub.add_parser("decode", help="audio → image")
     pd.add_argument("audio", help="WAV to read (from encode, or any recording)")
-    pd.add_argument("image", help="PNG to write; --annotate adds NAME.annotated.png")
+    pd.add_argument("image", help="PNG to write; --annotate adds NAME.annotated.png, "
+                                  "--annotate-text adds NAME.annotated.txt")
 
     pr = sub.add_parser("roundtrip", help="encode + decode + plot")
     pr.add_argument("image")
@@ -777,7 +1217,7 @@ def main(argv=None):
               lens=args.lens, lens_params=_parse_lens_params(args.lens_params),
               color=args.color, color_width=args.color_width,
               palette=args.palette, freq_scale=args.freq_scale,
-              annotate_out=args.annotate)
+              annotate_out=args.annotate, annotate_text_out=args.annotate_text)
 
     if args.cmd == "encode":
         encode(args.image, args.audio, **kw)

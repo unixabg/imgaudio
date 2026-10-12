@@ -113,6 +113,43 @@ the scale attached to the picture, and the remaining misses are the last semiton
 of low notes, where the band is wider than the interval. Timing was read well in
 every condition.
 
+### Reading it as text
+
+`--annotate-text` writes `look.annotated.txt`: the notes in the sound as plain
+text, one line each, with when it starts, how long it is heard, its name, its
+pitch in Hz, and how many cents it sits from the equal-tempered note (so the
+base-60 tunings show as they are). A line above the list says what kind of
+sound it is: how notes begin and fade, how bright the tone is, how much noise
+lies between the notes, and whether the pitch wavers.
+
+```bash
+python3 imgaudio.py --annotate-text decode mystery.wav look.png
+```
+
+```
+start s   lasts s  note   Hz        cents
+   0.00     0.95  A4        440.0    +0 ±2
+   0.49     1.71  C4        261.6    +0 ±2
+```
+
+It reads the sound itself with longer windows than the picture uses, so its
+pitches are good to a few cents even low down, where the picture's bands are a
+semitone wide. On 63 synthesized clips across all seven instruments (melodies,
+fifths and chords) it found 94% of the notes, named the first note right in 62
+of 63, and its pitches were within 3 cents of the truth 95% of the time. Extra
+notes it lists are mostly overtones or a ringing note counted twice. It is
+weakest on the piano's low chords, on two notes an octave apart that start
+together (it may list only the lower), and on sounds that are not notes at all,
+which its noise figure warns about.
+
+In a blind round, fresh readers (language models, two per condition) judged 12
+new clips. They named the first note exactly 24 of 24 times from the text, 20 of
+24 from the picture with rulers, and 24 of 24 when given both. All of the first
+four notes right: 22, 16 and 23 of 24. The two text misses were one faint false
+note a semitone below a real one (since removed). Readers given both mostly
+read only the text. The text cost each reader about 1,500 fewer tokens per clip
+than the picture, and took seconds rather than minutes to read.
+
 ### Hidden pictures
 
 Pictures that people deliberately draw into a sound often sit above the default
@@ -756,6 +793,7 @@ using.
 | `--palette` | grey | decode only: `octave` colours each pitch, shared by every sound |
 | `--freq-scale` | log | `linear` spaces rows evenly in Hz, as most spectrogram tools draw; encode and decode must match |
 | `--annotate` | off | decode only: also write `NAME.annotated.png` with seconds, Hz and note-name rulers |
+| `--annotate-text` | off | decode only: also write `NAME.annotated.txt`, the notes in plain text (start, name, Hz, cents) and a line on the sound's character |
 | `--lossless` | off | byte-exact archive; audio is harsh noise |
 | `--no-normalize` | off | needed for clean diffs |
 | `--lens` / `--lens-params` | raw | apply a lens |

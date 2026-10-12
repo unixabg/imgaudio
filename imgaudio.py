@@ -31,7 +31,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 from scipy.io import wavfile
-from scipy.signal import stft
+from scipy.signal import get_window, stft
 
 
 # ---------------------------------------------------------------------------
@@ -482,6 +482,26 @@ def _fundamentals(pf, pa, f_lo, f_hi, rel=0.06, max_notes=6, nh=40, n_score=12,
     return out
 
 
+def _mag_stft(x, sr, nperseg, hop, nfft, fmax=None, fmin=0.0):
+    """Magnitude spectrogram, as scipy's stft would give it (Hann window,
+    no edge padding), but worked out a block of frames at a time and kept
+    only between fmin and fmax, so a long recording fits in memory.
+    Returns (freqs, frame centre times, magnitudes as float32)."""
+    win = get_window("hann", nperseg)
+    scale = 1.0 / win.sum()
+    freqs = np.fft.rfftfreq(nfft, 1.0 / sr)
+    rows = np.where((freqs >= fmin) & (freqs <= (fmax if fmax else freqs[-1])))[0]
+    lo, hi = rows[0], rows[-1] + 1
+    n = max(0, (len(x) - nperseg) // hop + 1)
+    out = np.empty((hi - lo, n), dtype=np.float32)
+    idx = np.arange(nperseg)
+    for a in range(0, n, 512):
+        b = min(n, a + 512)
+        seg = x[(np.arange(a, b) * hop)[:, None] + idx[None, :]] * win
+        out[:, a:b] = (np.abs(np.fft.rfft(seg, nfft, axis=1))[:, lo:hi] * scale).T
+    return freqs[lo:hi], (np.arange(n) * hop + nperseg / 2) / sr, out
+
+
 def find_notes(audio, sr, f_hi=8000.0):
     """The notes in a sound: a list of dicts with t0 (start, s), t1 (last
     heard, s), midi (fractional), spread (cents), and loudness and timing
@@ -492,17 +512,14 @@ def find_notes(audio, sr, f_hi=8000.0):
     hop = N // 8
     pad = N                                       # silence each side: edges get whole windows
     x = np.concatenate([np.zeros(pad), x, np.zeros(pad)])
-    f, t, Z = stft(x, fs=sr, nperseg=N, noverlap=N - hop, nfft=2 * N,
-                   window="hann", boundary=None, padded=False)
-    M = np.abs(Z)
-    if M.max() <= 0:
+    top = min(sr / 2, 11025.0)                    # spectra kept up to here
+    f, t, M = _mag_stft(x, sr, N, hop, 2 * N, top)
+    if M.size == 0 or M.max() <= 0:
         return [], None
     tc = t - pad / sr
     split = 160.0                                 # below this, use the long window
-    f2, _, Z2 = stft(np.concatenate([np.zeros(N // 2), x]), fs=sr, nperseg=2 * N,
-                     noverlap=2 * N - hop, nfft=4 * N, window="hann",
-                     boundary=None, padded=False)
-    M2 = np.abs(Z2)
+    f2, _, M2 = _mag_stft(np.concatenate([np.zeros(N // 2), x]), sr, 2 * N, hop,
+                          4 * N, split * 1.1)
     gfloor = M.max() * 10 ** (-55 / 20)
 
     frames = []
@@ -539,9 +556,9 @@ def find_notes(audio, sr, f_hi=8000.0):
 
     # onsets of any note, from a short window
     Ns = 512
-    _, ts, Zs = stft(x, fs=sr, nperseg=Ns, noverlap=Ns - 128, window="hann",
-                     boundary=None, padded=False)
-    bb = np.maximum(np.diff(np.log(np.abs(Zs) + 1e-4), axis=1), 0).sum(axis=0)
+    _, ts, Ms = _mag_stft(x, sr, Ns, 128, Ns)
+    bb = np.maximum(np.diff(np.log(Ms + 1e-4), axis=1), 0).sum(axis=0)
+    del Ms
     tb = ts[1:] - pad / sr
     thr = np.median(bb) + 3 * np.std(bb)
     onsets = tb[[i for i in range(1, len(bb) - 1)
@@ -549,9 +566,7 @@ def find_notes(audio, sr, f_hi=8000.0):
 
     # each pitch's own loudness, from a medium window, to time its onsets
     Nm, lag = 2048 * N // 4096, 8
-    fm, tm, Zm = stft(x, fs=sr, nperseg=Nm, noverlap=Nm - Nm // 16, nfft=2 * Nm,
-                      window="hann", boundary=None, padded=False)
-    Mm = np.abs(Zm)
+    fm, tm, Mm = _mag_stft(x, sr, Nm, Nm // 16, 2 * Nm, top)
     tm = tm - pad / sr
 
     def rise_at_pitch(f0):

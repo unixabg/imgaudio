@@ -14,8 +14,10 @@ How it reads a clip:
   2. Put every series on an even clock using the frames' real times (cameras
      do not record evenly), and remove changes slower than 20 seconds, such
      as passing light.
-  3. Find each tile's strongest repeat and how clearly it stands above the
-     rest of its spectrum.
+  3. Find each tile's clearest repeat: the peak that stands highest above
+     its neighbours from half to twice its rate. (Judged against the whole
+     spectrum instead, the slow wandering in every real camera picture would
+     pass for a rhythm.)
   4. Join neighbouring tiles that repeat at the same rate into regions.
   5. A rate found clearly across most of the picture, still ground included,
      is not things moving: it is the camera (exposure, frame timing,
@@ -28,12 +30,13 @@ Each of the four strongest regions becomes a track, so it can be heard.
 
 Params (--motion-params):
     tile     tile size in pixels (default 16)
-    clear    how far a tile's peak must stand above its spectrum's median to
-             count as a rhythm (default 8)
+    clear    how far a tile's peak must stand above the median of its
+             neighbours (half to twice its rate) to count as a rhythm (default 8)
     longest  slowest rhythm looked for, in seconds per repeat (default 20)
 """
 
 import numpy as np
+from scipy.ndimage import gaussian_filter1d
 from scipy.signal import welch
 
 NAME = "rhythm"
@@ -72,10 +75,10 @@ def read(frames, times, params):
     even = np.empty((len(clock), flat.shape[1]), np.float32)
     for j in range(flat.shape[1]):
         even[:, j] = np.interp(clock, times, flat[:, j])
-    k = max(3, int(longest * fs))                                  # slower than this is light
-    kern = np.ones(k) / k
-    slow = np.apply_along_axis(lambda s: np.convolve(np.pad(s, k // 2, mode="edge"),
-                                                     kern, "valid")[:len(s)], 0, even)
+    # take away changes slower than `longest` (passing light). A smooth
+    # (Gaussian) average is used: a plain running average leaves ripples just
+    # above its cut-off, which look like a slow rhythm across the whole picture
+    slow = gaussian_filter1d(even, sigma=max(1.0, longest * fs / 2), axis=0, mode="nearest")
     even = even - slow
 
     nper = min(len(clock), max(64, int(4 * longest * fs)))
@@ -87,12 +90,25 @@ def read(frames, times, params):
     fb, Pb = f[band], P[band]
     # a rhythm is a true peak: higher than its neighbours, not the band's edge
     # (slow drift always makes the lowest frequencies the strongest)
+    # Each peak is judged against its neighbours in pitch, from half to twice
+    # its rate (leaving out the peak itself). Judged against the whole
+    # spectrum, the slow wandering every real camera picture has would make
+    # the slowest bins look like clear rhythms.
+    nb = len(fb)
+    lo_i = np.clip(np.searchsorted(fb, fb / 2), 0, nb - 1)
+    hi_i = np.clip(np.searchsorted(fb, fb * 2), 0, nb - 1)
+    near_med = np.empty_like(Pb)
+    for i in range(nb):
+        idx = np.r_[lo_i[i]:max(lo_i[i], i - 2), min(hi_i[i], i + 3):hi_i[i] + 1]
+        if len(idx) < 3:                       # too close to the band's edge to judge
+            near_med[i] = np.inf
+        else:
+            near_med[i] = np.median(Pb[idx], axis=0)
+    local = Pb / np.maximum(near_med, 1e-12)
     inner = np.zeros_like(Pb)
-    inner[1:-1] = np.where((Pb[1:-1] > Pb[:-2]) & (Pb[1:-1] > Pb[2:]), Pb[1:-1], 0)
+    inner[1:-1] = np.where((Pb[1:-1] > Pb[:-2]) & (Pb[1:-1] > Pb[2:]), local[1:-1], 0)
     peak_i = np.argmax(inner, axis=0)                               # (ty, tx)
-    peak_p = np.take_along_axis(Pb, peak_i[None], axis=0)[0]
-    med = np.median(Pb, axis=0)
-    clarity = peak_p / np.maximum(med, 1e-12)
+    clarity = np.take_along_axis(local, peak_i[None], axis=0)[0]
     rate = fb[peak_i]
     motion = np.sqrt(Pb.sum(axis=0))                                # how much it moves
     # brightness levels (0-255) a tile's quarters swing by, on average

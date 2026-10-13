@@ -273,9 +273,13 @@ with a line for each region. A rhythm shared by most of the picture, still parts
 included, is named as the camera's or the light's (exposure, frame timing,
 compression, flicker) and left out. On generated scenes it found each mover's
 rate within 0.02 repeats a second, gave nothing for a still scene, and named a
-whole-picture flicker as the camera. On the garden clip it found no fast steady
-rhythm, only slow repeats every 6 to 8 seconds around the stalk (the gusts), and
-named a slow rise and fall of the whole picture's brightness as camera or light.
+whole-picture flicker as the camera. On three five-minute garden clips (two
+windy, one calm) it found no steady rhythm in the scene, which agrees with
+`euler`: the stalk moves with the gusts, not like a pendulum. The only regular
+repeat is in the clock overlay's row. A first version reported a 16-second
+whole-picture rhythm and 6-to-8-second repeats around the stalk; the calm clip
+and a direct measurement showed both came from the lens's own filtering, and
+it was fixed. Each rhythm is now judged against its neighbouring rates.
 
 ```bash
 python3 motion.py read wind.mp4 rhythm.wav --motion-lens rhythm

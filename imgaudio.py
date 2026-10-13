@@ -298,7 +298,7 @@ def annotate(picture, out_path, *, t_first, t_last, f_lo, f_hi, scale="log",
     k = max(1, int(np.ceil(900 / cols)))                 # enlarge small pictures
     pic = pic.resize((cols * k, rows * k), Image.NEAREST)
     W, H = pic.size
-    L, R, T, B = 74, 78, 34, 46 + (34 if octave_key else 0)
+    L, R, T, B = 74, 78, 34, 64 + (34 if octave_key else 0)
     out = Image.new("RGB", (L + W + R, T + H + B), "white")
     out.paste(pic, (L, T))
     d = ImageDraw.Draw(out)
@@ -367,9 +367,14 @@ def annotate(picture, out_path, *, t_first, t_last, f_lo, f_hi, scale="log",
     d.text((L + W, 10), f"{f_lo:g}–{f_hi:g} Hz, {scale_word} scale, top = high",
            fill=faint, font=f_small, anchor="ra")
 
+    # How to read it: the rule that mattered most in the blind tests
+    d.text((L, T + H + 30), "reading: a note is a stack of lines (its overtones); its pitch is "
+           "the lowest line of the stack, read at the middle of its band",
+           fill=faint, font=f_small)
+
     # Octave light key: the colour of each note, the same in every octave
     if octave_key:
-        y0 = T + H + 40
+        y0 = T + H + 58
         d.text((L, y0 + 8), "colour = note:", fill=ink, font=f_small, anchor="lm")
         x = L + 110
         rgb = octave_rgb(261.6256 * 2.0 ** (np.arange(12) / 12))

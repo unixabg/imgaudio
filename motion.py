@@ -162,6 +162,101 @@ def encode_picture(grid, out_wav, col_sec, args):
         print(f"motion picture: {png}  ({cols}x{rows})")
 
 
+# ---------------------------------------------------------------------------
+# Rulers on the motion picture
+# ---------------------------------------------------------------------------
+def frame_skips(video, start=0.0, duration=None):
+    """Times (s) where the camera skipped frames, and for how long: gaps
+    longer than half a second and four times the usual frame spacing."""
+    out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                          "-show_entries", "frame=pts_time", "-of", "csv=p=0", video],
+                         capture_output=True, text=True).stdout.split()
+    t = np.array([float(x.split(",")[0]) for x in out if x.strip() and x != "N/A"])
+    if len(t) < 3:
+        return []
+    end = start + duration if duration else np.inf
+    t = t[(t >= start) & (t <= end)]
+    if len(t) < 3:
+        return []
+    g = np.diff(t)
+    big = np.where(g > max(0.5, 4 * np.median(g)))[0]
+    return [(float(t[i]), float(g[i])) for i in big]
+
+
+def annotate_motion(grid, out_path, *, video, mode, start, fps, keep=None, width=None,
+                    box=None, skips=()):
+    """A copy of the motion picture with rulers: seconds along the bottom,
+    height in the frame up the side, and the camera's skipped frames marked.
+    For reading only; the plain picture is what becomes sound."""
+    from PIL import ImageDraw
+    rows, cols = grid.shape
+    pic = Image.fromarray((grid * 255).round().astype(np.uint8), "L").convert("RGB")
+    Wp = int(np.clip(cols, 900, 1800))
+    Hp = 300
+    pic = pic.resize((Wp, Hp), Image.NEAREST if Wp >= cols else Image.BOX)
+    L, R, T, B = 78, 30, 38, 92
+    img = Image.new("RGB", (L + Wp + R, T + Hp + B), "white")
+    img.paste(pic, (L, T))
+    d = ImageDraw.Draw(img)
+    small, label = imgaudio._font(13), imgaudio._font(14)
+    ink, faint, red = (20, 20, 20), (110, 110, 110), (200, 30, 30)
+    d.rectangle((L - 1, T - 1, L + Wp, T + Hp), outline=ink)
+
+    # height in the frame (left)
+    for frac, name in ((0, "top"), (0.25, "25%"), (0.5, "50%"), (0.75, "75%"), (1, "bottom")):
+        y = T + frac * (Hp - 1)
+        d.line((L - 6, y, L - 1, y), fill=ink)
+        d.text((L - 9, y), name, fill=ink, font=small, anchor="rm")
+    d.text((L - 9, T - 14), "height", fill=faint, font=small, anchor="rm")
+
+    # time (bottom)
+    def x_of_col(c):
+        return L + (c + 0.5) * Wp / cols
+    if mode == "profile":
+        # column i is the change between frames i and i+1 of the sampled run
+        t0, t1 = start + 1 / fps, start + cols / fps
+        step = imgaudio._nice_step(t1 - t0, 10)
+        for t in np.arange(np.ceil(t0 / step) * step, t1 + 1e-9, step):
+            x = x_of_col((t - start) * fps - 1)
+            d.line((x, T + Hp, x, T + Hp + 6), fill=ink)
+            d.text((x, T + Hp + 9), f"{round(t, 3):g}", fill=ink, font=small, anchor="mt")
+        for ts, gap in skips:
+            x0 = x_of_col((ts - start) * fps - 1)
+            x1 = max(x0 + 2, x_of_col((ts + gap - start) * fps - 1))
+            d.rectangle((x0, T + Hp + 1, x1, T + Hp + 5), fill=red)
+    else:
+        # one block of `width` columns per kept step; time jumps between blocks
+        n = len(keep)
+        every = max(1, int(np.ceil(n / 10)))
+        for k in range(0, n, every):
+            x = L + k * width * Wp / cols
+            d.line((x, T + Hp, x, T + Hp + 6), fill=ink)
+            d.text((x, T + Hp + 9), f"{start + (keep[k] + 1) / fps:.1f}", fill=ink, font=small,
+                   anchor="mt")
+        for ts, gap in skips:
+            k = int(np.searchsorted((start + (np.asarray(keep) + 1) / fps), ts))
+            x = L + min(k, n) * width * Wp / cols
+            d.rectangle((x - 1, T + Hp + 1, x + 1, T + Hp + 5), fill=red)
+    d.text((L + Wp + 6, T + Hp + 9), "s", fill=faint, font=small)
+
+    # title and reading notes
+    what = (f"{Path(video).name}: motion, height in the {'box' if box else 'frame'} up, time across"
+            if mode == "profile" else
+            f"{Path(video).name}: each block is one moment where something moved, left to right in time")
+    d.text((L, 8), what, fill=ink, font=label)
+    notes = ["brighter = more moved at that height and moment.  "
+             "A bright stripe from top to bottom = everything moved at once (the camera, or the light)."]
+    if mode == "frames":
+        notes.append("Time jumps between blocks: still moments are left out. Labels are the seconds of each block.")
+    if skips:
+        notes.append("Red marks under the time ruler: the camera skipped frames there "
+                     + ", ".join(f"{a:.1f} s ({g:.1f} s)" for a, g in skips[:6]) + ".")
+    for i, line in enumerate(notes):
+        d.text((L, T + Hp + 32 + 17 * i), line, fill=faint if i else ink, font=small)
+    img.save(out_path)
+    return out_path
+
+
 def mux(video, sound, out, start, duration):
     cmd = ["ffmpeg", "-v", "error", "-y", "-ss", str(start)]
     if duration:
@@ -377,6 +472,11 @@ def main(argv=None):
                         "fraction of the pixels changed (0 keeps any motion; "
                         "--floor already removes camera noise)")
     p.add_argument("--png", default=None, help="also save the motion picture here")
+    p.add_argument("--annotate", action="store_true",
+                   help="profile and frames modes: also write NAME.annotated.png (beside "
+                        "--png, or beside the WAV) with seconds along the bottom, height in "
+                        "the frame up the side and the camera's skipped frames marked. "
+                        "For reading only; the sound is unchanged")
     p.add_argument("--mux", default=None,
                    help="profile and read modes: write the clip with this sound as its soundtrack")
     p.add_argument("--lens", default="raw",
@@ -437,9 +537,18 @@ def main(argv=None):
     moving = (d.mean(axis=(1, 2)) > 0).mean()
     print(f"  {len(frames)} frames, {len(d)} steps; something moved in {moving:.0%} of them")
 
+    def ruled(grid, **kw):
+        base = Path(args.png) if args.png else Path(args.output)
+        out = base.with_name(base.stem + ".annotated.png")
+        annotate_motion(grid, out, video=args.video, mode=args.mode, start=args.start, fps=fps,
+                        box=box, skips=frame_skips(args.video, args.start, args.duration), **kw)
+        print(f"annotated: {out}  (rulers for reading)")
+
     if args.mode == "profile":
         grid = motion_profile(d)
         encode_picture(grid, args.output, 1.0 / fps, args)
+        if args.annotate:
+            ruled(grid)
         if args.mux:
             mux(args.video, args.output, args.mux, args.start, args.duration)
     else:
@@ -451,6 +560,8 @@ def main(argv=None):
             raise SystemExit("nothing moved; try lowering --floor or --still")
         print(f"  kept {len(keep)} of {len(d)} steps (left out {len(d) - len(keep)} still ones)")
         encode_picture(strip, args.output, args.slot / args.width, args)
+        if args.annotate:
+            ruled(strip, keep=keep, width=args.width)
 
 
 if __name__ == "__main__":

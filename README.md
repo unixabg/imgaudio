@@ -99,7 +99,8 @@ python3 imgaudio.py --rows 300 --cols 600 --annotate decode mystery.wav look.png
 
 `look.png` itself is unchanged, so it still encodes back into sound; the
 annotated copy is only for reading. Read a note's pitch from the middle of its
-line. Below about 300 Hz the lines widen into bands (the decoder's pitch steps are
+line; the annotated copy prints that rule under the picture, since telling
+readers how to read was one of the biggest helps in the blind tests. Below about 300 Hz the lines widen into bands (the decoder's pitch steps are
 about 21.5 Hz apart at 22.05 kHz), so low notes are only accurate to about a
 semitone.
 
@@ -149,6 +150,15 @@ four notes right: 22, 16 and 23 of 24. The two text misses were one faint false
 note a semitone below a real one (since removed). Readers given both mostly
 read only the text. The text cost each reader about 1,500 fewer tokens per clip
 than the picture, and took seconds rather than minutes to read.
+
+The motion summaries were tested the same way: 12 generated scenes (0 to 2
+swaying things anywhere, camera still, shaken or bumped), text only, three fresh
+readers, key kept off disk. All three gave identical answers. Camera state 12 of
+12 (every bump time within 0.1 s), how many things 11 of 12, things found 12 of
+13, left-to-right third 12 of 12, swings per second 12 of 12 (within 0.02),
+top-to-bottom third 10 of 12. The one miss was a shaken scene with two swayers
+where `euler` found one and `rhythm` the other; readers kept only one. About 700
+tokens of text per clip.
 
 ### Hidden pictures
 
@@ -218,6 +228,16 @@ python3 motion.py profile wind.mp4 tree.wav --box 0.2,0,0.5,0.6 --start 3 --dura
 
 # music from only the motion
 python3 notate.py notes wind.wav wind-music.wav --voice lyre --base 60 --scale nid_qablim --grid 16
+```
+
+`--annotate` also writes `NAME.annotated.png` beside the motion picture (or the
+WAV): seconds along the bottom, height in the frame up the side, and red marks
+where the camera skipped frames. A bump shows as a bright stripe from top to
+bottom. In `frames` mode each block is one moment that moved, labelled with its
+second. The sound and the plain picture are unchanged.
+
+```bash
+python3 motion.py profile wind.mp4 wind.wav --png wind.png --annotate
 ```
 
 `profile` keeps the clip's timing, so its sound can be the video's soundtrack;
@@ -891,6 +911,7 @@ using.
 | `--floor` | 0.03 | brightness change that counts as motion; raise for noisy video |
 | `--width` / `--slot` | 48 / 1.0 | frames mode: columns and seconds per moving step |
 | `--mux` | — | profile and read modes: write the clip with this sound as its soundtrack |
+| `--annotate` | off | profile and frames modes: also write NAME.annotated.png with seconds, height in the frame and skipped frames |
 | `--motion-lens` | euler | read mode: which motion lens reads the motion |
 | `--motion-params` | — | read mode: key=value settings for the motion lens |
 | `--sound` | glide | read mode: `glide` (pitch follows each track) or `notes` (a note at each turn) |

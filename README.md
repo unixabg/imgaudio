@@ -176,6 +176,57 @@ lay within 2% of the line between two thirds.
 python3 motion.py read wind.mp4 both.wav --motion-lens euler,rhythm
 ```
 
+### Hidden in plain sight
+
+The lenses above read what visibly moves. `hidden` looks for what does not
+show: a patch of the picture whose brightness, colour, position or texture
+rises and falls more regularly than chance, however faintly. It searches six
+channels a generic camera records (brightness; blue-yellow and red-green apart
+from brightness; sideways and up-down shifts far below a pixel; texture), for
+every patch and every rate, and gives each finding the chance it is luck across
+the whole search, and its size. It sorts what it finds: too small to see, or
+large enough to see; echoes at multiples of a rhythm are folded in; rhythms the
+whole picture shares are the camera's or the light's; rhythms mirrored about
+the camera's uneven frame pattern are probably the camera's. In night mode it
+says so: infrared is itself light beyond human sight.
+
+`listen` is a tuning dial for the same thing, for the ear. Every patch is a
+voice (high pitch = top of the picture, left ear = left), and a patch sounds
+only when much of its own change repeats at the tuned rate. Wind spreads over
+all rates and stays silent; a regular flicker rings. `--sweep` plays the clip
+once per rate, sped up, each pass announced by beeps (1 beep = 0.5 a second,
+then 0.7, 1, 1.4, 2, 2.8). The dials: `--quiet` (how regular a patch must be to
+sound; lower hears fainter things and more noise), `--width-tune`, `--gain`,
+`--speed`, and `--channel` (any of the six). It writes a report of what sounded
+at each setting and where.
+
+```bash
+python3 motion.py read clip.mp4 hid.wav --motion-lens hidden
+python3 motion.py listen clip.mp4 dial.wav --sweep
+python3 motion.py listen clip.mp4 dial.wav --tune 1.7 --channel shift-up-down --quiet 0.15
+```
+
+Tested blind on a real windy minute from the garden camera: two copies, one
+with a flicker of half a brightness level out of 255 (about 1%, too small to
+notice) planted at a random spot and rate, the key written to a file neither
+judge opened until both had answered. The owner, listening to the tuned sweep,
+picked the right copy, the right rate setting, and low in the picture. Claude,
+reading the numbers and sealing the answer with a hash before the listening,
+named the copy, the place (lower left) and the rate (1.72 a second) exactly.
+The rhythm lens saw nothing, and a first listening design, loud where the
+picture changes most, buried the flicker under the wind; loudness by how
+regular a patch is made it audible. One round, so far.
+
+On that same real footage `hidden` also lists about eight much fainter
+regular changes, in both copies alike, so they are in the original video:
+around 0.1 levels of colour or 0.01 pixel of shift, several at about 0.18 a
+second, a rate that also appears once on a calm morning. They may be the
+camera's own processing (for example its colour balance hunting); they are
+not explained yet. Building the lens, a calm clip used like an astronomer's
+dark frame caught three flaws in it, each fixed: wind gusts read as rhythms,
+the camera's uneven frame timing copying motion to mirrored rates, and a bias
+at the slowest rates.
+
 ### Hidden pictures
 
 Pictures that people deliberately draw into a sound often sit above the default
@@ -920,7 +971,7 @@ using.
 
 | flag | default | effect |
 |---|---|---|
-| mode | — | `profile` (real time, height = pitch), `frames` (each change a whole picture) or `read` (a motion lens reads it; writes NAME.txt) |
+| mode | — | `profile` (real time, height = pitch), `frames` (each change a whole picture), `read` (a motion lens reads it; writes NAME.txt) or `listen` (tuning dial; writes NAME.txt) |
 | `--fps` | 15 / 5 | frames per second sampled (profile / frames) |
 | `--box` | whole frame | x,y,w,h in pixels or fractions; only that region |
 | `--start` / `--duration` | whole clip | time range, seconds |
@@ -932,7 +983,10 @@ using.
 | `--motion-params` | — | read mode: key=value settings for the motion lens |
 | `--sound` | glide | read mode: `glide` (pitch follows each track) or `notes` (a note at each turn) |
 | `--voice` / `--scale` / `--root` | harp / nid_qablim / 220 | read mode, notes: instrument, scale and first note |
-| `--read-width` | 320 | read mode: frame width the lens reads at |
+| `--read-width` | 320 | read and listen modes: frame width read at |
+| `--channel` | brightness | listen mode: brightness, blue-yellow, red-green, shift-across, shift-up-down, texture |
+| `--tune` / `--sweep` / `--rates` | 1.0 / off / — | listen mode: one rate, or each of several in turn |
+| `--quiet` / `--width-tune` / `--gain` / `--speed` | 0.25 / 0.15 / 0 / 4 | listen mode dials |
 
 **anomaly.py**
 

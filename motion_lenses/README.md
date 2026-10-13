@@ -26,6 +26,7 @@ whether more than one lens saw it, and pieces of one thing joined.
 |---|---|
 | `euler` | turns about a pivot, after Euler's rotation theorem (1775): where each mover is, where it pivots, how far it swings, its rhythm, when it was busiest. A shaken camera is noticed and taken away first. |
 | `rhythm` | a rhythm map: which parts of the scene repeat their motion and how often, drawn as a small letter map with one line per region. A rhythm shared by the whole picture is named as the camera's or the light's and left out. |
+| `hidden` | faint regular change too small to see, in six channels a generic camera records: brightness, two colour channels (apart from brightness), sideways and up-down shifts far below a pixel, and texture. Each finding comes with the chance it is luck across the whole search, its size, and whether it is too small to see or a visible sway. Echoes, the camera's own rhythms and its frame-timing copies are set aside. Wants colour frames (`COLOUR = True`). |
 
 ## Writing a lens
 
@@ -46,6 +47,9 @@ def read(frames, times, params):
                   findings=[dict(name=str, box=(x0, y0, x1, y1), rate=float or None), ...])
     """
 ```
+
+A lens that sets `COLOUR = True` receives RGB frames, `(n, rows, cols, 3)`,
+instead of greyscale.
 
 `findings` is optional. It lets `[both]` compare your lens with the others:
 each thing you found, its box as fractions of the picture (0 to 1, top left

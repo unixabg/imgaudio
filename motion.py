@@ -27,11 +27,19 @@ Two ways to listen:
             rhythm. Each thing it reads becomes a voice: a gliding tone
             (--sound glide) or notes on an instrument (--sound notes).
 
+  listen    a tuning dial for faint, regular change: every patch of the
+            picture is a voice that sounds only when it repeats regularly at
+            the tuned rate (--tune), or at each of several rates in turn
+            (--sweep). Wind and noise stay silent; a flicker too small to see
+            rings. Writes a report of what sounded and where.
+
   python3 motion.py profile wind.mp4 wind.wav --mux wind-heard.mp4
   python3 motion.py frames  wind.mp4 wind-frames.wav --fps 5
   python3 motion.py profile wind.mp4 tree.wav --box 0.2,0,0.5,0.6 --start 3 --duration 10
   python3 motion.py read wind.mp4 turns.wav            # also writes turns.txt
   python3 motion.py read wind.mp4 both.wav --motion-lens euler,rhythm   # and where they agree
+  python3 motion.py read wind.mp4 hid.wav --motion-lens hidden   # faint regular change, too small to see
+  python3 motion.py listen wind.mp4 dial.wav --sweep             # hear it: a tuning dial
   python3 motion.py read wind.mp4 turns.wav --sound notes --voice harp --scale nid_qablim
 
 Then make music from only the motion:
@@ -290,15 +298,18 @@ def load_motion_lenses():
     return found
 
 
-def read_frames_timed(path, width, box=None, start=0.0, duration=None, fps=None):
+def read_frames_timed(path, width, box=None, start=0.0, duration=None, fps=None,
+                      colour=False):
     """Greyscale frames as (n, rows, cols) uint8, with each frame's real time
     in seconds. Security cameras do not record evenly, and counting frames
-    instead of reading their times invents rhythms that are not there."""
+    instead of reading their times invents rhythms that are not there.
+    colour=True gives (n, rows, cols, 3) RGB instead."""
     filters = [f"fps={fps}"] if fps else []
     if box:
         x, y, w, h = box
         filters.append(f"crop={w}:{h}:{x}:{y}")
-    filters += [f"scale={width}:-2:flags=area", "format=gray", "showinfo"]
+    filters += [f"scale={width}:-2:flags=area", "format=" + ("rgb24" if colour else "gray"),
+                "showinfo"]
     cmd = ["ffmpeg", "-hide_banner", "-v", "info", "-ss", str(start)]
     if duration:
         cmd += ["-t", str(duration)]
@@ -310,8 +321,10 @@ def read_frames_timed(path, width, box=None, start=0.0, duration=None, fps=None)
     n = len(times)
     if n < 2:
         raise SystemExit("fewer than two frames in that range; nothing can move")
-    rows = len(r.stdout) // (n * width)
-    frames = np.frombuffer(r.stdout, np.uint8)[: n * rows * width].reshape(n, rows, width)
+    ch = 3 if colour else 1
+    rows = len(r.stdout) // (n * width * ch)
+    frames = np.frombuffer(r.stdout, np.uint8)[: n * rows * width * ch]
+    frames = frames.reshape((n, rows, width, 3) if colour else (n, rows, width))
     return frames, np.asarray(times) + start
 
 
@@ -394,7 +407,9 @@ def compare_findings(named):
             (home.append((lens, f)) if home else groups.append([(lens, f)]))
     if not groups:
         return ["neither lens found a moving thing"]
-    out = ["agreement between the lenses (a thing seen by both is one thing; count it once):"]
+    out = ["agreement between the lenses (a thing seen by both is one thing; count it once):"
+           if len(named) <= 2 else
+           "agreement between the lenses (a thing seen by several is one thing; count it once):"]
     both = [g for g in groups if len({l_ for l_, _ in g}) > 1]
     single = [g for g in groups if len({l_ for l_, _ in g}) == 1]
     for g in both + single:
@@ -402,12 +417,15 @@ def compare_findings(named):
         rate = f"; about {min(rates):.2f} swings a second" if rates else ""
         who = ", ".join(f"{l_} {f['name']}" for l_, f in g)
         lenses_ = {l_ for l_, _ in g}
-        kind = ("seen by both" if len(lenses_) > 1 else
+        kind = ("seen by both" if len(lenses_) == 2 else
+                f"seen by {len(lenses_)} lenses" if len(lenses_) > 2 else
                 f"only {g[0][0]} saw" + (" (in pieces)" if len(g) > 1 else ""))
         out.append(f"  {kind}: {_place(g[0][1]['box'])}{rate} ({who})")
     if single:
         out.append("  a thing only one lens saw is likely real but less certain: euler finds "
-                   "things that turn about a point, rhythm anything that repeats")
+                   "things that turn about a point, rhythm anything that repeats"
+                   + (", hidden faint regular change too small for the others"
+                      if any(l_ == "hidden" for l_, _ in named) else ""))
     return out
 
 
@@ -426,7 +444,12 @@ def read_mode(args, width, height, box):
     print(f"  {len(frames)} frames at {frames.shape[2]}x{frames.shape[1]}, "
           f"{times[-1] - times[0]:.1f} s; reading with {', '.join(m.NAME for m in mods)}")
     params = imgaudio._parse_lens_params(args.motion_params)
-    results = [(m, m.read(frames, times, params)) for m in mods]
+    rgb = None
+    if any(getattr(m, "COLOUR", False) for m in mods):
+        rgb, _ = read_frames_timed(args.video, args.read_width, box, args.start,
+                                   args.duration, args.fps, colour=True)
+    results = [(m, m.read(rgb if getattr(m, "COLOUR", False) else frames, times, params))
+               for m in mods]
     tracks = []
     for m, found in results:
         for tr in found.get("tracks", []):
@@ -506,16 +529,117 @@ def read_mode(args, width, height, box):
         mux(args.video, args.output, args.mux, args.start, args.duration)
 
 
+# ---------------------------------------------------------------------------
+# Listen mode: a tuning dial for faint, regular change
+# ---------------------------------------------------------------------------
+LISTEN_RATES = [0.5, 0.7, 1.0, 1.4, 2.0, 2.8]
+
+
+def listen_mode(args, width, height, box):
+    """Every patch of the picture is a voice (height = pitch, left to right
+    = stereo). Each pass is tuned to one rate, like a radio: a patch sounds
+    when at least `quiet` of its own change sits near that rate. Irregular
+    change (wind, noise) spreads over all rates and stays silent; a regular
+    flicker or quiver rings, however faint. --sweep plays the clip once per
+    rate, sped up, each pass announced by that many beeps."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from motion_lenses import hidden
+    channel = args.channel
+    if channel not in hidden.CHANNELS:
+        raise SystemExit(f"--channel must be one of: {', '.join(hidden.CHANNELS)}")
+    rgb, times = read_frames_timed(args.video, args.read_width, box, args.start,
+                                   args.duration, args.fps, colour=True)
+    ch, corners, night = hidden.channels(rgb, 16, [channel], shifted=False)
+    if channel not in ch:
+        raise SystemExit(f"no {channel} in this clip (night mode has no colour)")
+    clock, ev = hidden.even(ch[channel], times, args.slowest)
+    dt = float(np.median(np.diff(times)))
+    F = np.fft.rfft(ev, axis=0)
+    fr = np.fft.rfftfreq(len(clock), dt)
+    total = ev.var(axis=0) + 1e-12
+    H, W = rgb.shape[1:3]
+    ty, tx = (H - 16) // 16 + 1, (W - 16) // 16 + 1
+    rows, cols = corners[:, 0] // 16, corners[:, 1] // 16
+    pitch = 1600 * (150 / 1600) ** (rows / max(ty - 1, 1))
+    pan = cols / max(tx - 1, 1)
+    SR = SR_TRACKS
+
+    def tuned(rate):
+        g = np.exp(-0.5 * ((fr - rate) / (args.width_tune * rate)) ** 2)[:, None]
+        bp = np.fft.irfft(F * g, n=len(clock), axis=0)
+        share = bp.var(axis=0) / total
+        weight = np.clip((share - args.quiet) / 0.15, 0, 1) * 10 ** (args.gain / 20)
+        return np.clip(bp / (bp.std(axis=0) + 1e-12), 0, None) / 2 * weight, share
+
+    def render(env, spd):
+        dur = (clock[-1] - clock[0] + dt) / spd
+        N = int(dur * SR); ta = np.arange(N) / SR
+        L = np.zeros(N); R = np.zeros(N)
+        on = np.where(env.max(axis=0) > 0.005)[0]
+        for j in on:
+            e = np.interp(ta * spd, clock - clock[0], env[:, j])
+            tone = np.sin(2 * np.pi * pitch[j] * ta + j)
+            L += tone * e * np.cos(pan[j] * np.pi / 2); R += tone * e * np.sin(pan[j] * np.pi / 2)
+        return np.stack([L, R], 1), on
+
+    def beeps(k):
+        t = np.arange(int(0.12 * SR)) / SR
+        b = 0.3 * np.sin(2 * np.pi * 2000 * t) * np.hanning(len(t))
+        one = np.concatenate([b, np.zeros(int(0.12 * SR))])
+        s_ = np.concatenate([one] * k + [np.zeros(int(0.5 * SR))])
+        return np.stack([s_, s_], 1)
+
+    def places(on, share):
+        out = []
+        for j in sorted(on, key=lambda j: -share[j])[:5]:
+            y, x = corners[j]
+            out.append(f"{hidden._where((x / W, y / H, (x + 16) / W, (y + 16) / H))} "
+                       f"{share[j]:.0%}")
+        return "; ".join(out)
+
+    hi = 0.45 / dt
+    rates = [r for r in (args.rates or LISTEN_RATES) if r < hi] if args.sweep else [args.tune]
+    parts, report = [], []
+    for k, r in enumerate(rates, 1):
+        env, share = tuned(r)
+        snd, on = render(env, args.speed if args.sweep else 1.0)
+        if args.sweep:
+            parts += [beeps(k), snd, np.zeros((int(0.8 * SR), 2))]
+        else:
+            parts.append(snd)
+        head = (f"{k} beep{'s' if k > 1 else ''}: " if args.sweep else "") + f"tuned to {r:g} a second"
+        report.append(f"{head}: {len(on)} patch{'es' if len(on) != 1 else ''} sounded"
+                      + (f" ({places(on, share)})" if len(on) else "")
+                      + f"; the most regular patch has {share.max():.0%} of its change at this rate")
+    mix = np.concatenate(parts)
+    peak = np.abs(mix).max()
+    mix *= 0.85 / max(peak, 1.0)
+    imgaudio.wavfile.write(args.output, SR, (mix * 32767).astype(np.int16))
+    lines = [f"{Path(args.video).name}: listened to by motion.py listen, channel {channel}",
+             f"segment: {times[0]:.2f} to {times[-1]:.2f} s, {len(times)} frames at "
+             f"{rgb.shape[2]}x{rgb.shape[1]}" + ("; night (infrared) mode" if night else ""),
+             f"dials: quiet {args.quiet:.0%} (a patch sounds when that much of its own change is "
+             f"near the tuned rate), width ±{args.width_tune:.0%}, gain {args.gain:g} dB"
+             + (f", speed {args.speed:g}x" if args.sweep else ""),
+             "how to listen: high pitch = top of the picture, low = bottom; left ear = left, "
+             "right ear = right. Silence means nothing there repeats regularly at that rate.",
+             ""] + report + ["", f"sound: {Path(args.output).name}, {len(mix) / SR:.0f} s"]
+    txt = Path(args.output).with_suffix(".txt")
+    txt.write_text("\n".join(lines) + "\n")
+    print(f"wrote {args.output} and {txt}")
+
+
 def main(argv=None):
     class _Fmt(argparse.RawDescriptionHelpFormatter,
                argparse.ArgumentDefaultsHelpFormatter):
         pass
 
     p = argparse.ArgumentParser(description=__doc__, formatter_class=_Fmt)
-    p.add_argument("mode", choices=["profile", "frames", "read"],
+    p.add_argument("mode", choices=["profile", "frames", "read", "listen"],
                    help="profile: real time, height = pitch; frames: every "
                         "changed frame as its own small picture; read: a motion "
-                        "lens reads the motion and writes a text summary (see above)")
+                        "lens reads the motion and writes a text summary; listen: a tuning "
+                        "dial for faint regular change, with a report (see above)")
     p.add_argument("video", help="any video ffmpeg can read")
     p.add_argument("output", help="WAV to write")
     p.add_argument("--fps", type=float, default=None,
@@ -582,6 +706,27 @@ def main(argv=None):
                         "'python3 notate.py scales' (base 60 tunings included)")
     p.add_argument("--root", type=float, default=220.0,
                    help="read mode, --sound notes: the scale's first note, Hz")
+    p.add_argument("--channel", default="brightness",
+                   help="listen mode: what to listen to: brightness, blue-yellow, red-green, "
+                        "shift-across, shift-up-down or texture")
+    p.add_argument("--tune", type=float, default=1.0,
+                   help="listen mode: the rate to tune to, repeats a second")
+    p.add_argument("--sweep", action="store_true",
+                   help="listen mode: play the clip once per rate (sped up), each pass "
+                        "announced by beeps: 1 beep = 0.5 a second, then 0.7, 1, 1.4, 2, 2.8")
+    p.add_argument("--rates", type=lambda s: [float(x) for x in s.split(",")], default=None,
+                   help="listen mode with --sweep: your own rates, comma-separated")
+    p.add_argument("--quiet", type=float, default=0.25,
+                   help="listen mode: a patch sounds when at least this share (0-1) of its "
+                        "own change is near the tuned rate; lower hears fainter things, and more noise")
+    p.add_argument("--width-tune", type=float, default=0.15,
+                   help="listen mode: how wide the tuning is, as a fraction of the rate")
+    p.add_argument("--gain", type=float, default=0.0,
+                   help="listen mode: louder by this many decibels")
+    p.add_argument("--speed", type=float, default=4.0,
+                   help="listen mode with --sweep: how much faster than real time each pass plays")
+    p.add_argument("--slowest", type=float, default=20.0,
+                   help="listen mode: changes slower than this many seconds (light) are taken away")
     p.add_argument("--read-width", type=int, default=320,
                    help="read mode: frame width the lens reads at, in pixels")
     args = p.parse_args(argv)
@@ -589,10 +734,10 @@ def main(argv=None):
     width, height, length = probe(args.video)
     box = parse_box(args.box, width, height) if args.box else None
     bw, bh = (box[2], box[3]) if box else (width, height)
-    if args.mode == "read":
+    if args.mode in ("read", "listen"):
         print(f"{args.video}: {width}x{height}, {length:.1f}s"
               + (f"; box {box[2]}x{box[3]} at ({box[0]},{box[1]})" if box else ""))
-        read_mode(args, width, height, box)
+        (read_mode if args.mode == "read" else listen_mode)(args, width, height, box)
         return
     fps = args.fps or (15.0 if args.mode == "profile" else 5.0)
     rows = args.rows

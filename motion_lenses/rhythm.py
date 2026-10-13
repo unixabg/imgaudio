@@ -136,6 +136,20 @@ def read(frames, times, params):
                      "things moving; it is left out below")
     if not camera_rates:
         lines.append("camera or light: no rhythm shared by the whole picture")
+    # moments when most of the picture changed at once (a bump, a flash)
+    step_change = np.abs(np.diff(frames[:, :ty * tile, :tx * tile].astype(np.float32), axis=0))
+    tile_change = step_change.reshape(n - 1, ty, tile, tx, tile).mean(axis=(2, 4))
+    base = np.median(tile_change, axis=0)
+    # a typical tile changing 20 times its usual amount: a bump measured 39;
+    # the camera's own refresh (a full keyframe every few seconds) reaches 8
+    usual = np.median(tile_change / np.maximum(base, 0.5), axis=(1, 2))
+    wide = usual > 20
+    tmid = (times[1:] + times[:-1]) / 2
+    if wide.any() and wide.mean() < 0.2:
+        moments = ", ".join(f"{int(x // 60)}:{x % 60:04.1f}" for x in tmid[wide][:8])
+        lines.append(f"most of the picture changed at once at {moments}"
+                     + (" and more" if wide.sum() > 8 else "")
+                     + " (a bump to the camera, or a flash of light)")
     lively = (amp > 1.0).mean()                     # a whole brightness level or more
     if lively > 0.6:
         lines.append(f"note: {lively:.0%} of the picture changes, so the camera itself "

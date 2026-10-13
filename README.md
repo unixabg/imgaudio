@@ -255,7 +255,9 @@ fixed point, the result is one turn about one axis. One camera sees the flat
 version, a pivot in the picture and an angle. For each mover it reports where
 it is, where it pivots, how much a turn explains its motion compared with a
 slide, how far it swings, its rhythm and when it was busiest. If most of the
-picture moves together it says the camera moved and takes that away first.
+picture moves together for much of the clip it says the camera moved and takes
+that away first; if the whole picture only jumps now and then (a bump, a gust
+shaking the mount), it names those moments and leaves them out.
 
 On scenes generated with known answers it found every mover's rhythm exactly,
 put pivots within about 5% of the picture (10% at worst) and swings within
@@ -280,6 +282,16 @@ repeat is in the clock overlay's row. A first version reported a 16-second
 whole-picture rhythm and 6-to-8-second repeats around the stalk; the calm clip
 and a direct measurement showed both came from the lens's own filtering, and
 it was fixed. Each rhythm is now judged against its neighbouring rates.
+
+Both lenses were then tested on a real bump: the camera knocked once, on a
+windy afternoon, about 19 seconds into a 90-second clip (the picture jumped
+about 4 pixels in one step). At first `euler` said the camera was still,
+because it judged over the whole clip and one jolt was outvoted, and the jolt
+hid every mover. It now checks step by step: it reported "jolted 1 time ... at
+0:19.4 (3.9 px)", left that step out, and found the stalk and the moving shadow
+of branches on the ground. `rhythm` names the same moment. The camera's own
+full-picture refresh every 4 seconds changes a typical patch up to 8 times its
+usual amount; the bump changed it 39 times, so the bar is set at 20.
 
 ```bash
 python3 motion.py read wind.mp4 rhythm.wav --motion-lens rhythm

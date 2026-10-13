@@ -20,8 +20,10 @@ How it reads a clip:
   5. Report where each mover is, its pivot, how far it swings, its strongest
      rhythm, and when it was busiest. Each mover's angle becomes a track.
 
-If most of the picture moves together, the camera moved; that motion is
-taken away first, and the summary says the movers may be incomplete.
+If most of the picture moves together for much of the clip, the camera moved;
+that motion is taken away first, and the summary says the movers may be
+incomplete. If the whole picture jumps at once only now and then (a bump, a
+gust shaking the mount), those moments are named and left out.
 
 Params (--motion-params):
     tile       patch size in pixels (default 16)
@@ -194,7 +196,21 @@ def read(frames, times, params):
                      "of the steps, so the camera moved (shaken or turned). That motion is "
                      "taken away first; movers below may be incomplete.")
     else:
-        lines.append("camera: still")
+        # a jolt: the whole picture jumps at once, now and then. Judged step by
+        # step, since a moment's jolt is outvoted by minutes of stillness.
+        jolt = np.where(together > 0.6)[0]
+        if len(jolt):
+            shift = np.median(np.abs(v[jolt][:, good]), axis=1)
+            when = ", ".join(f"{_clock(tm[i])}.{int(tm[i] * 10) % 10} ({s_:.1f} px)"
+                             for i, s_ in zip(jolt[:8], shift[:8]))
+            lines.append(f"camera: jolted {len(jolt)} time{'s' if len(jolt) > 1 else ''}, the whole "
+                         f"picture jumping at once at {when}"
+                         + (" and more" if len(jolt) > 8 else "")
+                         + "; those steps are left out of everything below")
+            v[jolt] = 0
+        else:
+            lines.append("camera: still")
+    skip = set(np.where(together > 0.6)[0].tolist()) if np.median(together) <= 0.6 else set()
 
     act = np.sqrt((np.abs(v) ** 2).mean(axis=0))
     active = np.where(good & (act > max(3 * np.median(act[good]), 0.05)))[0]
@@ -252,7 +268,8 @@ def read(frames, times, params):
         tmask.flat[idx] = True
         area = np.zeros(fr.shape[1:], np.float32)
         area[:H, :W] = np.kron(binary_dilation(tmask, iterations=1), np.ones((tile, tile)))
-        steps = np.array([turn_step(f32(i), f32(i + 1), (p.real, p.imag), area)
+        steps = np.array([0.0 if i in skip else
+                          turn_step(f32(i), f32(i + 1), (p.real, p.imag), area)
                           for i in range(T)])
         ang = np.degrees(np.cumsum(steps))
         k = max(3, int(10 / step))                  # drift slower than 10 s is not a swing

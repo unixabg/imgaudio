@@ -73,55 +73,77 @@ def patch_grid(H, W, tile, shifted=True):
     return np.array(out)
 
 
-def channels(frames, tile=16, which=None, shifted=True):
+def channels(frames, tile=16, which=None, shifted=True, block=128):
     """frames: (n, H, W, 3) uint8 RGB or (n, H, W) grey. Returns
-    (dict name -> (n, P) float array, corners (P, 2), night: bool)."""
+    (dict name -> (n, P) float array, corners (P, 2), night: bool).
+    Works through the frames a block at a time, so a long clip fits in
+    memory; only one value per patch per frame is kept."""
     which = which or CHANNELS
-    f = frames.astype(np.float32)
-    if f.ndim == 3:
-        f = f[..., None].repeat(3, axis=3)
-    n, H, W, _ = f.shape
-    Y = 0.299 * f[..., 0] + 0.587 * f[..., 1] + 0.114 * f[..., 2]
-    U = f[..., 2] - Y
-    V = f[..., 0] - Y
-    night = bool(np.abs(U).mean() < 1.0 and np.abs(V).mean() < 1.0)
+    n, H, W = frames.shape[:3]
     corners = patch_grid(H, W, tile, shifted)
     P = len(corners)
-    # summed-area tables make every patch's mean one lookup
+    y0, x0 = corners[:, 0], corners[:, 1]
+
+    def luma_chroma(fr):
+        f = fr.astype(np.float32)
+        if f.ndim == 3:
+            return f, None, None
+        Y = 0.299 * f[..., 0] + 0.587 * f[..., 1] + 0.114 * f[..., 2]
+        return Y, f[..., 2] - Y, f[..., 0] - Y
+
     def patch_mean(img):
         S = np.zeros((img.shape[0], H + 1, W + 1), np.float64)
         S[:, 1:, 1:] = img.cumsum(1).cumsum(2)
-        y, x = corners[:, 0], corners[:, 1]
-        tot = S[:, y + tile, x + tile] - S[:, y, x + tile] - S[:, y + tile, x] + S[:, y, x]
+        tot = (S[:, y0 + tile, x0 + tile] - S[:, y0, x0 + tile]
+               - S[:, y0 + tile, x0] + S[:, y0, x0])
         return (tot / (tile * tile)).astype(np.float32)
-    out = {}
-    if "brightness" in which:
-        out["brightness"] = patch_mean(Y)
-    if not night:
-        if "blue-yellow" in which:
-            out["blue-yellow"] = patch_mean(U)
-        if "red-green" in which:
-            out["red-green"] = patch_mean(V)
-    if "texture" in which:
-        m = patch_mean(Y)
-        out["texture"] = np.sqrt(np.maximum(patch_mean(Y * Y) - m * m, 0))
-    if "shift-across" in which or "shift-up-down" in which:
-        # one Lucas-Kanade step per patch: tiny shifts, a fraction of a pixel
-        Ys = gaussian_filter(Y, (0, 1.0, 1.0))
-        Iy, Ix = np.gradient(Ys, axis=(1, 2))
-        It = np.diff(Ys, axis=0)
-        Ix, Iy = (Ix[:-1] + Ix[1:]) / 2, (Iy[:-1] + Iy[1:]) / 2
-        sxx, syy, sxy = patch_mean(Ix * Ix), patch_mean(Iy * Iy), patch_mean(Ix * Iy)
-        sxt, syt = patch_mean(Ix * It), patch_mean(Iy * It)
-        det = sxx * syy - sxy ** 2
-        ok = det > 1e-3 * np.maximum(sxx + syy, 1e-6) ** 2
-        u = np.where(ok, -(syy * sxt - sxy * syt) / np.where(ok, det, 1), 0)
-        v = np.where(ok, -(sxx * syt - sxy * sxt) / np.where(ok, det, 1), 0)
-        zero = np.zeros((1, P), np.float32)
-        if "shift-across" in which:
-            out["shift-across"] = np.concatenate([zero, np.cumsum(u, axis=0)]).astype(np.float32)
-        if "shift-up-down" in which:
-            out["shift-up-down"] = np.concatenate([zero, np.cumsum(v, axis=0)]).astype(np.float32)
+
+    # night (infrared) mode: no colour anywhere; judged on a sample of frames
+    sample = frames[:: max(1, n // 20)]
+    _, U_, V_ = luma_chroma(sample)
+    night = U_ is None or bool(np.abs(U_).mean() < 1.0 and np.abs(V_).mean() < 1.0)
+
+    want_shift = "shift-across" in which or "shift-up-down" in which
+    out = {k: np.zeros((n, P), np.float32) for k in which
+           if not (night and k in ("blue-yellow", "red-green"))}
+    u_all = np.zeros((n, P), np.float32); v_all = np.zeros((n, P), np.float32)
+    prev = None                                  # last smoothed frame of the previous block
+    for s0 in range(0, n, block):
+        Y, U, V = luma_chroma(frames[s0:s0 + block])
+        if U is None:
+            U = V = np.zeros_like(Y)
+        sl = slice(s0, s0 + len(Y))
+        if "brightness" in out:
+            out["brightness"][sl] = patch_mean(Y)
+        if "blue-yellow" in out:
+            out["blue-yellow"][sl] = patch_mean(U)
+        if "red-green" in out:
+            out["red-green"][sl] = patch_mean(V)
+        if "texture" in out:
+            m = patch_mean(Y)
+            out["texture"][sl] = np.sqrt(np.maximum(patch_mean(Y * Y) - m * m, 0))
+        if want_shift:
+            # one Lucas-Kanade step per patch between neighbouring frames:
+            # tiny shifts, a fraction of a pixel
+            Ys = gaussian_filter(Y, (0, 1.0, 1.0))
+            seq = Ys if prev is None else np.concatenate([prev[None], Ys])
+            Iy, Ix = np.gradient(seq, axis=(1, 2))
+            It = np.diff(seq, axis=0)
+            Ix, Iy = (Ix[:-1] + Ix[1:]) / 2, (Iy[:-1] + Iy[1:]) / 2
+            sxx, syy, sxy = patch_mean(Ix * Ix), patch_mean(Iy * Iy), patch_mean(Ix * Iy)
+            sxt, syt = patch_mean(Ix * It), patch_mean(Iy * It)
+            det = sxx * syy - sxy ** 2
+            ok = det > 1e-3 * np.maximum(sxx + syy, 1e-6) ** 2
+            u = np.where(ok, -(syy * sxt - sxy * syt) / np.where(ok, det, 1), 0)
+            v = np.where(ok, -(sxx * syt - sxy * sxt) / np.where(ok, det, 1), 0)
+            first = s0 if prev is not None else s0 + 1     # step i -> i+1 stored at i+1
+            u_all[first:first + len(u)] = u
+            v_all[first:first + len(v)] = v
+            prev = Ys[-1]
+    if "shift-across" in out:
+        out["shift-across"] = np.cumsum(u_all, axis=0)
+    if "shift-up-down" in out:
+        out["shift-up-down"] = np.cumsum(v_all, axis=0)
     return out, corners, night
 
 
@@ -170,10 +192,15 @@ def camera_beat(times):
     records unevenly in a repeating pattern (None if even). Large motion is
     copied faintly to rates mirrored about this beat."""
     g = np.diff(times)
-    if len(g) < 30 or g.std() < 0.05 * g.mean():
+    if len(g) < 30:
         return None
-    jit = times - np.linspace(times[0], times[-1], len(times))
-    f = np.fft.rfftfreq(len(jit), (times[-1] - times[0]) / (len(times) - 1))
+    med = np.median(g)
+    g = np.where(g > 2 * med, med, g)           # skipped frames are not the pattern
+    if g.std() < 0.05 * g.mean():
+        return None
+    t2 = np.concatenate([[0.0], np.cumsum(g)])
+    jit = t2 - np.linspace(0, t2[-1], len(t2))
+    f = np.fft.rfftfreq(len(jit), t2[-1] / (len(t2) - 1))
     P = np.abs(np.fft.rfft(jit - jit.mean())) ** 2
     ok = f > 0.3
     if not ok.any():
@@ -263,14 +290,25 @@ def read(frames, times, params):
     for name, r_, lift in wide:
         shared.add((name, round(r_, 2)))
     if wide:
-        by = {}
-        for name, r_, lift in wide:
-            by.setdefault(round(r_, 2), []).append(name)
+        rates_ = np.array(sorted({round(r_, 3) for _, r_, _ in wide}))
+        tol = max(2.5 / (times[-1] - times[0]), 0.01)
+        # a comb: many rates at multiples of one base (a camera that writes a
+        # full fresh picture every so many seconds pulses at all its multiples)
+        comb, rest, best_n = None, rates_, 0
+        for b in rates_[(rates_ >= 0.1) & (rates_ <= 0.6)]:
+            on = (np.abs(rates_ / b - np.round(rates_ / b)) * b <= tol) & (rates_ >= b - tol)
+            if on.sum() >= max(4, best_n + 1):
+                comb, rest, best_n = b, rates_[~on], int(on.sum())
+        say = []
+        if comb:
+            say.append(f"{comb:.2f} a second and its multiples (something every "
+                       f"{1 / comb:.1f} s: likely the camera writing a full fresh picture)")
+        if len(rest):
+            say.append(", ".join(f"{r_:.2f}" for r_ in rest[:8])
+                       + (f" and {len(rest) - 8} more" if len(rest) > 8 else "") + " a second")
         lines.append("camera or light: the whole picture is faintly lifted at "
-                     + "; ".join(f"{r_:.2f} a second ({', '.join(sorted(set(ns)))})"
-                                 for r_, ns in sorted(by.items()))
-                     + ". That is the camera's (its fresh-picture rhythm, timing, compression) "
-                     "or the light's, not one place's; those rates are left out below")
+                     + "; ".join(say) + ". That is the camera's or the light's, not one "
+                     "place's; those exact rates are left out below")
     for name, (clock, ev, f, rate, best) in per_chan.items():
         strong = best > np.log(tests / 0.5) / np.log(2)          # beyond luck at 50%
         if strong.sum() >= 3:
@@ -286,7 +324,7 @@ def read(frames, times, params):
 
     dfw = 1.0 / (times[-1] - times[0])
     found = [c for c in cand if c[0] < luck and c[4] >= min_share and not any(
-        n_ == c[1] and abs(r_ - c[3]) <= max(0.05 * r_, 2.5 * dfw) for n_, r_ in shared)]
+        n_ == c[1] and abs(r_ - c[3]) <= 2.5 * dfw for n_, r_ in shared)]
     # join: same rate (within 5%) and touching patches, across channels
     groups = []
     for c in found:

@@ -206,6 +206,20 @@ python3 motion.py listen clip.mp4 dial.wav --sweep
 python3 motion.py listen clip.mp4 dial.wav --tune 1.7 --channel shift-up-down --quiet 0.15
 ```
 
+To see which faint rhythms keep coming back, read a folder of segments and
+tally them. A rhythm in every segment, whatever the weather and the light, is
+most likely the camera's own habit; one that comes and goes with wind, sun or
+time of day belongs to the world. A full five-minute segment takes about a
+minute and 1.5 GB of memory.
+
+```bash
+mkdir -p out
+for f in segments/*.mp4; do
+  python3 motion.py read "$f" "out/$(basename "${f%.mp4}").wav" --motion-lens hidden
+done
+python3 examples/hidden-tally.py out/*.txt
+```
+
 Tested blind on a real windy minute from the garden camera: two copies, one
 with a flicker of half a brightness level out of 255 (about 1%, too small to
 notice) planted at a random spot and rate, the key written to a file neither

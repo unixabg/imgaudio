@@ -16,6 +16,10 @@ python3 motion.py read clip.mp4 clip.wav --sound notes --voice harp --scale nid_
 Each run writes the WAV and a text summary beside it (`clip.txt`): what the
 lens found, in a few lines, and the tracks it turned into sound.
 
+Several lenses can read the same frames: `--motion-lens euler,rhythm`. The
+summary then has a section per lens and ends with `[both]`: each thing found,
+whether more than one lens saw it, and pieces of one thing joined.
+
 ## Lenses
 
 | lens | what it reads |
@@ -38,9 +42,14 @@ def read(frames, times, params):
     times:  (n,) seconds, each frame's real time (cameras are uneven)
     params: dict of str -> str from --motion-params key=val,key=val
     returns: dict(lines=[str, ...],
-                  tracks=[dict(name=str, t=array, value=array, size=float), ...])
+                  tracks=[dict(name=str, t=array, value=array, size=float), ...],
+                  findings=[dict(name=str, box=(x0, y0, x1, y1), rate=float or None), ...])
     """
 ```
+
+`findings` is optional. It lets `[both]` compare your lens with the others:
+each thing you found, its box as fractions of the picture (0 to 1, top left
+first), and how often it repeats per second if you know.
 
 `lines` go into the text summary. Each track becomes a voice: with
 `--sound glide` its pitch follows the value (plus or minus `size` maps to

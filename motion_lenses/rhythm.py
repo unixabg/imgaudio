@@ -56,7 +56,7 @@ def read(frames, times, params):
     longest = float(params.get("longest", "20"))
     n, H, W = frames.shape
     ty, tx = H // tile, W // tile
-    lines, tracks = [], []
+    lines, tracks, findings = [], [], []
     span = times[-1] - times[0]
     if n < 16 or span < 4:
         return dict(lines=["clip too short to judge rhythms"], tracks=tracks)
@@ -216,7 +216,7 @@ def read(frames, times, params):
             grid[cy][cx] = L
     if not found:
         lines.append("no part of the scene repeats its motion clearly")
-        return dict(lines=lines, tracks=tracks)
+        return dict(lines=lines, tracks=tracks, findings=findings)
 
     lines.append(f"rhythm map ({tx} x {ty} tiles, top of the picture first; "
                  ". = no clear repeat, a letter = a region below):")
@@ -239,7 +239,9 @@ def read(frames, times, params):
         ref = sig[:, np.argmax(sig.std(axis=0))]
         sig = sig * np.sign((sig * ref[:, None]).sum(axis=0) + 1e-12)
         val = sig.mean(axis=1)
+        if g["size"] >= 2:                         # a single tile is too small to compare
+            findings.append(dict(name=f"region {L}", box=(x0, y0, x1, y1), rate=g["rate"]))
         if len(tracks) < 4:                       # more voices than four is a crowd
             tracks.append(dict(name=f"region {L}", t=clock, value=val,
                                size=float(np.percentile(np.abs(val), 95)) or 1.0))
-    return dict(lines=lines, tracks=tracks)
+    return dict(lines=lines, tracks=tracks, findings=findings)

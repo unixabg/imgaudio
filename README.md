@@ -160,6 +160,22 @@ top-to-bottom third 10 of 12. The one miss was a shaken scene with two swayers
 where `euler` found one and `rhythm` the other; readers kept only one. About 700
 tokens of text per clip.
 
+Two changes followed. `--motion-lens euler,rhythm` reads the same frames with
+both lenses and ends with a `[both]` section: each thing either lens found,
+whether both saw it or only one, and pieces of one thing joined. And when the
+camera shook, `euler` now says whether a mover keeps a steady rhythm the
+camera's own motion does not have, which shows it is a real mover rather than
+camera motion left behind. (A reader asked why they had dropped the second
+thing pointed to exactly that doubt.) On 12 new scenes, generated after the
+changes and read by two more fresh readers: camera state 12 of 12 (bump times
+within 0.1 s), how many things 12 of 12, things found 13 of 13, left-to-right
+13 of 13, swings per second 13 of 13, top-to-bottom 10 of 13; all three misses
+lay within 2% of the line between two thirds.
+
+```bash
+python3 motion.py read wind.mp4 both.wav --motion-lens euler,rhythm
+```
+
 ### Hidden pictures
 
 Pictures that people deliberately draw into a sound often sit above the default

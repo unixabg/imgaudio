@@ -183,7 +183,8 @@ def read(frames, times, params):
     r = (xc + 1j * yc).ravel()
     v = (U + 1j * V).reshape(T, -1)
     good = conf.ravel() > np.percentile(conf, 20) * 0.5
-    lines, tracks = [], []
+    lines, tracks, findings = [], [], []
+    cam_rhythm = None
 
     # did the camera move? (most of the picture moving together)
     together = (np.abs(v[:, good]) > 0.15).mean(axis=1)
@@ -192,6 +193,14 @@ def read(frames, times, params):
                                            ((-3 * W, 4 * W), (-3 * H, 4 * H)))
         common = np.median(v[:, good].real, axis=1) + 1j * np.median(v[:, good].imag, axis=1)
         v = v - common[:, None] - cam_theta[:, None] * 1j * (r - cam_p)[None, :]
+        # the camera's own rhythm, if any: a mover that keeps a steady rhythm
+        # the camera does not have cannot be camera motion left behind
+        if T >= 20:
+            cpos = np.cumsum(common)
+            cq = np.linspace(0.03, 0.4 / float(np.median(np.diff(tm))), 1500)
+            cp_ = sum(lombscargle(tm, z - z.mean(), 2 * np.pi * cq, normalize=True)
+                      for z in (cpos.real, cpos.imag)) / 2
+            cam_rhythm = (float(cq[int(np.argmax(cp_))]), float(cp_.max()))
         lines.append(f"camera: the whole picture moved together in {np.mean(together > 0.6):.0%} "
                      "of the steps, so the camera moved (shaken or turned). That motion is "
                      "taken away first; movers below may be incomplete.")
@@ -216,7 +225,7 @@ def read(frames, times, params):
     active = np.where(good & (act > max(3 * np.median(act[good]), 0.05)))[0]
     if len(active) == 0:
         lines.append("nothing turned or moved beyond the noise")
-        return dict(lines=lines, tracks=tracks)
+        return dict(lines=lines, tracks=tracks, findings=findings)
 
     # group patches that move together and touch
     X = v[:, active]
@@ -310,12 +319,21 @@ def read(frames, times, params):
             rh = (f"no steady rhythm (strongest {m['rate']:.2f} a second, one every "
                   f"{1 / m['rate']:.1f} s, but weak)")
         busy = ", ".join(_clock(b) for b in m["busy"]) or "-"
+        if cam_rhythm is not None:                 # the camera moved throughout
+            steady = m["rate"] is not None and m["strength"] >= 0.3
+            camera_like = cam_rhythm[1] >= 0.3 and abs(m["rate"] / cam_rhythm[0] - 1) < 0.2 \
+                if steady else True
+            rh += ("; the camera's own motion has no such rhythm, so this is a real mover, "
+                   "not camera motion left behind" if steady and not camera_like else
+                   "; this may be camera motion left behind")
         lines.append(
             f"mover {i}: {place} (x {x0 / W:.0%}-{x1 / W:.0%}, y {y0 / H:.0%}-{y1 / H:.0%} of the "
             f"picture); {how} about a pivot {pv} (x {m['p'].real / W:.0%}, y {m['p'].imag / H:.0%}); "
             f"a turn explains {max(m['turn'], 0):.0%} of its motion, a slide {max(m['slide'], 0):.0%}; "
             f"swings about ±{m['swing']:.1f}°; {rh}; busiest around {busy}")
         tracks.append(dict(name=f"mover {i}", t=tm, value=m["angle"], size=max(m["swing"], 1e-3)))
+        findings.append(dict(name=f"mover {i}", box=(x0 / W, y0 / H, x1 / W, y1 / H),
+                             rate=m["rate"] if (m["strength"] or 0) >= 0.3 else None))
     if not movers:
         lines.append("something moved, but nothing large enough to count as a mover")
-    return dict(lines=lines, tracks=tracks)
+    return dict(lines=lines, tracks=tracks, findings=findings)

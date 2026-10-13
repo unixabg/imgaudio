@@ -31,6 +31,7 @@ Two ways to listen:
   python3 motion.py frames  wind.mp4 wind-frames.wav --fps 5
   python3 motion.py profile wind.mp4 tree.wav --box 0.2,0,0.5,0.6 --start 3 --duration 10
   python3 motion.py read wind.mp4 turns.wav            # also writes turns.txt
+  python3 motion.py read wind.mp4 both.wav --motion-lens euler,rhythm   # and where they agree
   python3 motion.py read wind.mp4 turns.wav --sound notes --voice harp --scale nid_qablim
 
 Then make music from only the motion:
@@ -360,19 +361,79 @@ def track_notes(t, value, size, root, ratios, t0, span_oct=1.5):
     return notes
 
 
+def _place(box_):
+    """Thirds of the picture, in words, for a box (x0, y0, x1, y1) in fractions."""
+    cx, cy = (box_[0] + box_[2]) / 2, (box_[1] + box_[3]) / 2
+    v = ["upper", "middle", "lower"][min(2, int(cy * 3))]
+    h = ["left", "centre", "right"][min(2, int(cx * 3))]
+    return (f"{v} {h} (x {box_[0]:.0%}-{box_[2]:.0%}, y {box_[1]:.0%}-{box_[3]:.0%})")
+
+
+def compare_findings(named):
+    """Lines saying which things more than one lens saw, and which only one.
+    named: [(lens name, [finding, ...]), ...]; a finding is a dict with
+    box (x0, y0, x1, y1 as fractions of the picture), rate (repeats a second
+    or None) and name. Two findings are one thing when their boxes overlap or
+    lie close, and their rates agree (or one is twice the other: a sway can
+    brighten a patch twice per swing)."""
+    def same(f, g):
+        (a0, b0, a1, b1), (c0, d0, c1, d1) = f["box"], g["box"]
+        overlap = min(a1, c1) > max(a0, c0) and min(b1, d1) > max(b0, d0)
+        close = np.hypot((a0 + a1 - c0 - c1) / 2, (b0 + b1 - d0 - d1) / 2) < 0.15
+        if not (overlap or close):
+            return False
+        if not f.get("rate") or not g.get("rate"):
+            return True
+        r = f["rate"] / g["rate"]
+        return any(abs(r / k - 1) < 0.2 for k in (1, 2, 0.5))
+    groups = []                                   # each: [(lens, finding), ...]
+    for lens, fs in named:
+        for f in fs:
+            # one lens may split one thing into pieces; those join it too
+            home = next((g for g in groups if any(same(f, h) for _, h in g)), None)
+            (home.append((lens, f)) if home else groups.append([(lens, f)]))
+    if not groups:
+        return ["neither lens found a moving thing"]
+    out = ["agreement between the lenses (a thing seen by both is one thing; count it once):"]
+    both = [g for g in groups if len({l_ for l_, _ in g}) > 1]
+    single = [g for g in groups if len({l_ for l_, _ in g}) == 1]
+    for g in both + single:
+        rates = [f["rate"] for _, f in g if f.get("rate")]
+        rate = f"; about {min(rates):.2f} swings a second" if rates else ""
+        who = ", ".join(f"{l_} {f['name']}" for l_, f in g)
+        lenses_ = {l_ for l_, _ in g}
+        kind = ("seen by both" if len(lenses_) > 1 else
+                f"only {g[0][0]} saw" + (" (in pieces)" if len(g) > 1 else ""))
+        out.append(f"  {kind}: {_place(g[0][1]['box'])}{rate} ({who})")
+    if single:
+        out.append("  a thing only one lens saw is likely real but less certain: euler finds "
+                   "things that turn about a point, rhythm anything that repeats")
+    return out
+
+
 def read_mode(args, width, height, box):
     import notate
     lenses = load_motion_lenses()
-    lens = lenses.get(args.motion_lens)
-    if lens is None:
-        raise SystemExit(f"unknown motion lens '{args.motion_lens}'. available: {sorted(lenses)}")
+    names = [x.strip() for x in args.motion_lens.split(",") if x.strip()]
+    for nm in names:
+        if nm not in lenses:
+            raise SystemExit(f"unknown motion lens '{nm}'. available: {sorted(lenses)}")
+    mods = [lenses[nm] for nm in names]
+    multi = len(mods) > 1
     frames, times = read_frames_timed(args.video, args.read_width, box, args.start,
                                       args.duration, args.fps)
     gaps = np.diff(times)
     print(f"  {len(frames)} frames at {frames.shape[2]}x{frames.shape[1]}, "
-          f"{times[-1] - times[0]:.1f} s; reading with {lens.NAME}")
-    found = lens.read(frames, times, imgaudio._parse_lens_params(args.motion_params))
-    tracks = found.get("tracks", [])
+          f"{times[-1] - times[0]:.1f} s; reading with {', '.join(m.NAME for m in mods)}")
+    params = imgaudio._parse_lens_params(args.motion_params)
+    results = [(m, m.read(frames, times, params)) for m in mods]
+    tracks = []
+    for m, found in results:
+        for tr in found.get("tracks", []):
+            tr = dict(tr, unit=getattr(m, "UNIT", ""))
+            if multi:
+                tr["name"] = f"{m.NAME} {tr['name']}"
+            tracks.append(tr)
 
     # sound: every track a voice, as long as the clip
     t0, t1 = times[0], times[-1]
@@ -411,23 +472,30 @@ def read_mode(args, width, height, box):
 
     # text summary
     skips = [(times[i], gaps[i]) for i in np.where(gaps > max(0.5, 4 * np.median(gaps)))[0]]
-    head = [f"{Path(args.video).name}: motion read by motion.py read --motion-lens {lens.NAME}",
+    head = [f"{Path(args.video).name}: motion read by motion.py read --motion-lens "
+            f"{','.join(m.NAME for m in mods)}",
             f"segment: {t0:.2f} to {t1:.2f} s, {len(frames)} frames read at "
             f"{frames.shape[2]}x{frames.shape[1]}"
             + (f", box {box[2]}x{box[3]} at ({box[0]},{box[1]}) of {width}x{height}" if box else
                f" (from {width}x{height})")
-            + f"; frames {np.min(gaps):.2f} to {np.max(gaps):.2f} s apart",
-            f"lens: {lens.NAME}: {getattr(lens, 'DESCRIPTION', '')}"]
+            + f"; frames {np.min(gaps):.2f} to {np.max(gaps):.2f} s apart"]
+    head += [f"lens: {m.NAME}: {getattr(m, 'DESCRIPTION', '')}" for m in mods]
     if skips:
         head.append("the camera skipped frames at "
                     + ", ".join(f"{int(a // 60)}:{a % 60:04.1f} ({g:.1f} s)" for a, g in skips[:8]))
-    unit = getattr(lens, "UNIT", "")
-    body = list(found.get("lines", []))
+    body = []
+    for m, found in results:
+        if multi:
+            body += ([""] if body else []) + [f"[{m.NAME}]"]
+        body += list(found.get("lines", []))
+    if multi:
+        body += ["", "[both]"] + compare_findings(
+            [(m.NAME, found.get("findings", [])) for m, found in results])
     snd = ([f"sound: {Path(args.output).name}, {(t1 - t0):.1f} s, one voice per track"
             + (" (pitch follows the value, plus or minus a typical swing = plus or minus "
                "7 semitones; loudness follows how fast it changes)" if args.sound == "glide" else
                " (a note each time a track turns around; pitch from how far it swung)")]
-           + [f"  {v}; typical swing ±{tr['size']:.2g} {unit}".rstrip()
+           + [f"  {v}; typical swing ±{tr['size']:.2g} {tr['unit']}".rstrip()
               for v, tr in zip(voices, tracks)])
     if not tracks:
         snd = ["sound: silent, nothing to voice"]
@@ -497,7 +565,8 @@ def main(argv=None):
                         "proportional to how much moved")
     lenses = load_motion_lenses()
     p.add_argument("--motion-lens", default="euler",
-                   help="read mode: how to read the motion. "
+                   help="read mode: how to read the motion; several, comma-separated "
+                        "(e.g. euler,rhythm), read the same frames and say where they agree. "
                         + "; ".join(f"{k}: {getattr(m, 'DESCRIPTION', '')}"
                                     for k, m in sorted(lenses.items())))
     p.add_argument("--motion-params", default="",

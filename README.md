@@ -267,6 +267,20 @@ pivot at the bottom edge where the stalk enters the picture, swinging about
 and the treetops moved too little to register at the default 320-pixel width.
 A five-minute clip takes about three minutes.
 
+The second lens, `rhythm`, is a rhythm map: which parts of the scene repeat
+their motion and how often, drawn as a small letter map (one letter per region)
+with a line for each region. A rhythm shared by most of the picture, still parts
+included, is named as the camera's or the light's (exposure, frame timing,
+compression, flicker) and left out. On generated scenes it found each mover's
+rate within 0.02 repeats a second, gave nothing for a still scene, and named a
+whole-picture flicker as the camera. On the garden clip it found no fast steady
+rhythm, only slow repeats every 6 to 8 seconds around the stalk (the gusts), and
+named a slow rise and fall of the whole picture's brightness as camera or light.
+
+```bash
+python3 motion.py read wind.mp4 rhythm.wav --motion-lens rhythm
+```
+
 To write your own, copy `motion_lenses/_example.py`; see
 `motion_lenses/README.md` for the contract.
 

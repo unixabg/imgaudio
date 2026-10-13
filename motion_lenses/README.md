@@ -21,6 +21,7 @@ lens found, in a few lines, and the tracks it turned into sound.
 | lens | what it reads |
 |---|---|
 | `euler` | turns about a pivot, after Euler's rotation theorem (1775): where each mover is, where it pivots, how far it swings, its rhythm, when it was busiest. A shaken camera is noticed and taken away first. |
+| `rhythm` | a rhythm map: which parts of the scene repeat their motion and how often, drawn as a small letter map with one line per region. A rhythm shared by the whole picture is named as the camera's or the light's and left out. |
 
 ## Writing a lens
 

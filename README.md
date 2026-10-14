@@ -25,16 +25,18 @@ WAV and MIDI. See [The web page](#the-web-page) for building and deploying it.
 ## Setup
 
 ```bash
-sudo apt install python3-venv imagemagick ffmpeg sox
+sudo apt install git python3-venv imagemagick ffmpeg sox
 
-mkdir -p ~/imgaudio && cd ~/imgaudio
+git clone https://github.com/unixabg/imgaudio.git ~/imgaudio
+cd ~/imgaudio
 python3 -m venv .venv
 source .venv/bin/activate
 pip install numpy scipy Pillow matplotlib
 ```
 
 Activate with `source .venv/bin/activate` each session, or call the venv python
-directly: `~/imgaudio/.venv/bin/python3 imgaudio.py ...`
+directly: `~/imgaudio/.venv/bin/python3 imgaudio.py ...`. To update later:
+`cd ~/imgaudio && git pull`.
 
 ## Layout
 

@@ -29,7 +29,7 @@ def main(paths):
     for path in paths:
         seg = path.split("/")[-1].rsplit(".", 1)[0]
         for line in open(path, encoding="utf-8"):
-            m = re.match(r"found \d+ \(([a-z ]+)[:)].*?\): (\w+ \w+) \(x.*?repeats ([\d.]+) times"
+            m = re.match(r"found \d+ \(([a-z ,]+)[:)].*?\): (\w+ \w+) \(x.*?repeats ([\d.]+) times"
                          r".*? in ([a-z-]+),", line)
             if m:
                 r = round(float(m.group(3)) / STEP) * STEP

@@ -32,8 +32,10 @@ look unlikely to be luck while being a tiny part of what the patch does.
 
 A place that shows the same rhythm in several channels, or in neighbouring
 patches, is one finding. A rhythm shared by much of the picture is the
-camera's or the light's. Findings in the top or bottom strip of the picture
-are flagged: cameras print the time there, and a clock is regular. When the
+camera's or the light's. Findings inside the top or bottom strip of the picture
+are listed apart as likely the clock: cameras print the time there, and a
+clock is regular. A finding whose rate is a multiple, a half or a third of
+the camera's fresh-picture rhythm (within one measuring step) says so. When the
 camera is in night (infrared) mode the colour channels carry nothing and are
 left out; infrared is itself light beyond human sight.
 
@@ -287,6 +289,7 @@ def read(frames, times, params):
 
     # a rhythm in much of the picture is the camera's or the light's
     shared = set()
+    comb = None                                 # the camera's fresh-picture rhythm, if seen
     for name, r_, lift in wide:
         shared.add((name, round(r_, 2)))
     if wide:
@@ -303,6 +306,7 @@ def read(frames, times, params):
         if comb:
             say.append(f"{comb:.2f} a second and its multiples (something every "
                        f"{1 / comb:.1f} s: likely the camera writing a full fresh picture)")
+        rest = np.unique(np.round(rest, 2))     # two decimals are enough to read
         if len(rest):
             say.append(", ".join(f"{r_:.2f}" for r_ in rest[:8])
                        + (f" and {len(rest) - 8} more" if len(rest) > 8 else "") + " a second")
@@ -419,18 +423,45 @@ def read(frames, times, params):
         g["visible"] = any(v_ >= VISIBLE[n_] for n_, v_ in g["size"].items())
         g["tiny"] = all(v_ < FLOOR[n_] for n_, v_ in g["size"].items())
     kept = [g for g in kept if not g["tiny"]]
-    tied_ = [g for g in kept if g.get("camera_tied")]
-    hidden_ = [g for g in kept if g not in tied_ and not g["visible"]]
-    seen_ = [g for g in kept if g not in hidden_ and g not in tied_]
+    # at the top or bottom strip: where cameras print the time, and a clock is regular
+    edge_ = [g for g in kept if g["box"][3] <= 0.12 or g["box"][1] >= 0.88]   # inside the strip
+    tied_ = [g for g in kept if g.get("camera_tied") and g not in edge_]
+    hidden_ = [g for g in kept if g not in tied_ and g not in edge_ and not g["visible"]]
+    seen_ = [g for g in kept if g not in hidden_ and g not in tied_ and g not in edge_]
+    # does its rate match the camera's own fresh-picture rhythm: a multiple of
+    # it, or a half or a third of it (every other refresh, every third)?
+    for g in kept:
+        g["camera_match"] = None
+        if comb:
+            tol_m = 1.0 / span_t                   # one measuring step: no looser
+            for m_ in (1, 2, 3):
+                k_ = round(g["rate"] * m_ / comb)
+                if k_ >= 1 and abs(g["rate"] - comb * k_ / m_) <= tol_m:
+                    frac = f"{k_}/{m_}" if m_ > 1 and k_ % m_ else f"{k_ // m_ if m_ > 1 else k_}x"
+                    g["camera_match"] = (f"its rate is {frac} of the camera's fresh-picture rhythm "
+                                         f"(every {1 / comb:.1f} s), so probably the camera's")
+                    break
     if beat:
         lines.append(f"camera: records frames unevenly, in a pattern that repeats {beat:.2f} times a "
                      "second; two rhythms mirrored about it come from that pattern working on "
                      "the picture, and are listed last as probably the camera's")
+    n_match = sum(1 for g in hidden_ if g["camera_match"])
     lines.append(f"{len(hidden_)} hidden (regular but too small to see: under 1.5 brightness "
-                 f"levels or 0.2 pixel), {len(seen_)} large enough to see, {len(tied_)} probably "
-                 "the camera's (mirrored about its frame pattern)")
+                 f"levels or 0.2 pixel)"
+                 + (f", {n_match} of them at a rate of the camera's own refresh" if n_match else "")
+                 + f"; {len(seen_)} large enough to see; {len(tied_)} probably the camera's "
+                 f"(mirrored about its frame pattern); {len(edge_)} at the top or bottom edge "
+                 "(likely the camera's printed clock)")
 
-    for i, g in enumerate(hidden_ + seen_ + tied_, 1):
+    def luck_txt(v):
+        return "smaller than can be shown" if v <= 0 else f"{v:.0e}"
+
+    order = hidden_ + seen_ + tied_ + edge_
+    # voices go first to what is not yet explained, never to the clock
+    voice_order = ([g for g in hidden_ if not g["camera_match"]] + seen_
+                   + [g for g in hidden_ if g["camera_match"]] + tied_)
+    voiced = {id(g) for g in voice_order[:4]}
+    for i, g in enumerate(order, 1):
         box = g["box"]
         name, p = g["best"][1], g["best"][2]
         clock, ev, f, rate, best = per_chan[name]
@@ -439,10 +470,13 @@ def read(frames, times, params):
         X = np.stack([np.sin(w_ * clock), np.cos(w_ * clock)], 1)
         cs = np.linalg.lstsq(X, ev[:, p] - ev[:, p].mean(), rcond=None)[0]
         amp = float(np.hypot(*cs))
-        chans_txt = ", ".join(f"{k} ({v:.0e})" for k, v in sorted(g["chans"].items(), key=lambda kv: kv[1]))
-        edge = (" — at the edge of the picture, where cameras often print the time; "
-                "a clock is regular" if box[1] < 0.08 or box[3] > 0.92 else "")
-        kind = ("probably the camera: it and another rhythm mirror each other about the "
+        chans_txt = ", ".join(f"{k} ({luck_txt(v)})" for k, v in sorted(g["chans"].items(), key=lambda kv: kv[1]))
+        edge = ""
+        if g["camera_match"] and g not in edge_:
+            edge = "; " + g["camera_match"]
+        kind = ("at the edge of the picture, where cameras print the time: likely the clock"
+                if g in edge_ else
+                "probably the camera: it and another rhythm mirror each other about the "
                 f"camera's {beat:.2f}-a-second frame pattern" if g in tied_ else
                 "hidden: too small to see" if g in hidden_ else
                 "large enough to see: a regular sway, flutter or flicker")
@@ -456,10 +490,10 @@ def read(frames, times, params):
                      f"{'es' if len(set(g['at'])) > 1 else ''}; repeats {g['rate']:.2f} times a "
                      f"second (every {1 / g['rate']:.2f} s); by about ±{amp:.2g} "
                      f"{UNITS.get(name, '')} in {name}, {g['share']:.0%} of that patch's own change; "
-                     f"chance of luck {g['chance']:.0e}; "
+                     f"chance of luck {luck_txt(g['chance'])}; "
                      f"seen in {chans_txt}{extra}{edge}")
         findings.append(dict(name=f"found {i}", box=box, rate=g["rate"]))
-        if len(tracks) < 4:
+        if id(g) in voiced:
             bp = ev[:, p] - ev[:, p].mean()
             Fq = np.fft.rfft(bp)
             fq = np.fft.rfftfreq(len(bp), dt)

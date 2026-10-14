@@ -32,9 +32,10 @@ look unlikely to be luck while being a tiny part of what the patch does.
 
 A place that shows the same rhythm in several channels, or in neighbouring
 patches, is one finding. A rhythm shared by much of the picture is the
-camera's or the light's. Findings inside the top or bottom strip of the picture
-are listed apart as likely the clock: cameras print the time there, and a
-clock is regular. A finding whose rate is a multiple, a half or a third of
+camera's or the light's. Where the camera prints the time is found from the
+footage: printed digits flip in one frame, single pixels jumping a hundred
+levels or more, once a second at the same moment within the second. Findings
+on the printing are listed apart as the clock. A finding whose rate is a multiple, a half or a third of
 the camera's fresh-picture rhythm (within one measuring step) says so. When the
 camera is in night (infrared) mode the colour channels carry nothing and are
 left out; infrared is itself light beyond human sight.
@@ -147,6 +148,61 @@ def channels(frames, tile=16, which=None, shifted=True, block=128):
     if "shift-up-down" in out:
         out["shift-up-down"] = np.cumsum(v_all, axis=0)
     return out, corners, night
+
+
+def printed_clock(frames, times, corners, tile=16, block=128, jump=60):
+    """Find where the camera prints the time, from the footage itself.
+
+    A printed digit sits still, then flips in one frame: single pixels jump
+    by a hundred levels or more, and the seconds digit does it once a second,
+    always at the same moment within the second. Scenery changes softly, and
+    a printed name that never changes does not flip at all.
+
+    Returns a bool array over `corners` (the patches the printing covers), or
+    None if no flipping seconds digit is found."""
+    n = len(frames)
+    P = len(corners)
+    flips = np.zeros((n - 1, P), bool)
+    for s in range(0, n - 1, block):
+        e = min(n, s + block + 1)
+        g = frames[s:e].astype(np.int16)
+        if g.ndim == 4:
+            g = g.sum(axis=3) // 3
+        d = np.abs(np.diff(g, axis=0))
+        for p, (y, x) in enumerate(corners):
+            flips[s:e - 1, p] = d[:, y:y + tile, x:x + tile].max(axis=(1, 2)) >= jump
+    # a fresh picture can jump many places at once; a digit flips alone
+    flips[flips.mean(axis=1) > 0.05] = False
+    t1 = times[1:]
+    span = times[-1] - times[0]
+
+    def phase(ts):                       # where in the second, and how firmly
+        z = np.exp(2j * np.pi * ts).mean()
+        return np.angle(z) / (2 * np.pi) % 1.0, abs(z)
+
+    secs = [p for p in range(P)
+            if flips[:, p].sum() >= 0.5 * span and phase(t1[flips[:, p]])[1] >= 0.7]
+    if not secs or len(secs) > 0.15 * P:
+        return None
+    ph, _ = phase(np.concatenate([t1[flips[:, p]] for p in secs]))
+    ok = np.zeros(P, bool)
+    for p in range(P):
+        ts = t1[flips[:, p]]
+        if len(ts) >= 3:
+            off = np.abs((ts - ph + 0.5) % 1.0 - 0.5)          # distance from the flip moment
+            ok[p] = np.mean(off <= 0.25) >= 0.8
+    # the other digits flip on the same moment, beside the seconds: grow out
+    # from the seconds digit through touching patches only
+    out = np.zeros(P, bool)
+    out[secs] = True
+    grew = True
+    while grew:
+        grew = False
+        for p in np.where(ok & ~out)[0]:
+            y, x = corners[p]
+            if np.any((np.abs(corners[out, 0] - y) <= tile) & (np.abs(corners[out, 1] - x) <= tile)):
+                out[p] = grew = True
+    return out if out.sum() <= 0.15 * P else None
 
 
 def even(series, times, slowest=20.0):
@@ -423,8 +479,20 @@ def read(frames, times, params):
         g["visible"] = any(v_ >= VISIBLE[n_] for n_, v_ in g["size"].items())
         g["tiny"] = all(v_ < FLOOR[n_] for n_, v_ in g["size"].items())
     kept = [g for g in kept if not g["tiny"]]
-    # at the top or bottom strip: where cameras print the time, and a clock is regular
-    edge_ = [g for g in kept if g["box"][3] <= 0.12 or g["box"][1] >= 0.88]   # inside the strip
+    # on the printed clock, found from its digits flipping every second
+    printed = printed_clock(frames, times, corners, tile)
+    edge_ = []
+    if printed is not None:
+        pc = corners[printed]
+        ys_, xs_ = pc[:, 0], pc[:, 1]
+        lines.append(f"camera: prints the time at {_where((xs_.min() / W, ys_.min() / H, (xs_.max() + tile) / W, (ys_.max() + tile) / H))}"
+                     ": its digits flip once a second there. Finds on it are listed last as "
+                     "the clock")
+        for g in kept:
+            on = sum(1 for y, x in set(g["at"])
+                     if np.any((np.abs(ys_ - y) < tile) & (np.abs(xs_ - x) < tile)))
+            if on >= len(set(g["at"])) / 2:
+                edge_.append(g)
     tied_ = [g for g in kept if g.get("camera_tied") and g not in edge_]
     hidden_ = [g for g in kept if g not in tied_ and g not in edge_ and not g["visible"]]
     seen_ = [g for g in kept if g not in hidden_ and g not in tied_ and g not in edge_]
@@ -450,8 +518,7 @@ def read(frames, times, params):
                  f"levels or 0.2 pixel)"
                  + (f", {n_match} of them at a rate of the camera's own refresh" if n_match else "")
                  + f"; {len(seen_)} large enough to see; {len(tied_)} probably the camera's "
-                 f"(mirrored about its frame pattern); {len(edge_)} at the top or bottom edge "
-                 "(likely the camera's printed clock)")
+                 f"(mirrored about its frame pattern); {len(edge_)} on the camera's printed clock")
 
     def luck_txt(v):
         return "smaller than can be shown" if v <= 0 else f"{v:.0e}"
@@ -474,7 +541,7 @@ def read(frames, times, params):
         edge = ""
         if g["camera_match"] and g not in edge_:
             edge = "; " + g["camera_match"]
-        kind = ("at the edge of the picture, where cameras print the time: likely the clock"
+        kind = ("on the printed clock, where digits flip every second: the clock"
                 if g in edge_ else
                 "probably the camera: it and another rhythm mirror each other about the "
                 f"camera's {beat:.2f}-a-second frame pattern" if g in tied_ else

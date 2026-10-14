@@ -12,8 +12,8 @@ Run the hidden lens on a folder of segments, then tally its reports:
 
 A rhythm that turns up in every segment, whatever the weather and the light,
 is most likely the camera's own habit. One that comes and goes with wind, sun
-or time of day belongs to the world. Places at the top or bottom edge are
-often the camera's printed clock.
+or time of day belongs to the world. Places on the camera's printed clock
+are marked (clock).
 """
 import collections
 import re
@@ -23,7 +23,7 @@ STEP = 0.02                                       # rates closer than this count
 
 
 def main(paths):
-    found = collections.defaultdict(list)     # rate -> [(segment, place, channel, kind, edge)]
+    found = collections.defaultdict(list)     # rate -> [(segment, place, channel, kind, clock)]
     shared = collections.defaultdict(set)     # rate -> segments where the whole picture had it
     combs = collections.defaultdict(set)
     for path in paths:
@@ -34,7 +34,7 @@ def main(paths):
             if m:
                 r = round(float(m.group(3)) / STEP) * STEP
                 found[r].append((seg, m.group(2), m.group(4), m.group(1),
-                                 "edge of the picture" in line))
+                                 "printed clock" in line or "edge of the picture" in line))
             if line.startswith("camera or light:"):
                 c = re.search(r"([\d.]+) a second and its multiples", line)
                 if c:
@@ -49,7 +49,7 @@ def main(paths):
     print("faint rhythms found in one place, most widespread first:")
     for r, hits in sorted(found.items(), key=lambda kv: (-len({h[0] for h in kv[1]}), kv[0])):
         segs = {h[0] for h in hits}
-        places = sorted({f"{h[1]}{' (edge)' if h[4] else ''} in {h[2]}" for h in hits})
+        places = sorted({f"{h[1]}{' (clock)' if h[4] else ''} in {h[2]}" for h in hits})
         print(f"  {r:.2f} a second (every {1 / r:.1f} s): in {len(segs)} of {n} segments; "
               + "; ".join(places[:4]) + (f"; and {len(places) - 4} more" if len(places) > 4 else ""))
     if not found:

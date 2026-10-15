@@ -243,6 +243,33 @@ dark frame caught three flaws in it, each fixed: wind gusts read as rhythms,
 the camera's uneven frame timing copying motion to mirrored rates, and a bias
 at the slowest rates.
 
+#### The camera's own habits
+
+A security camera is not a neutral eye. Read across fifteen five-minute
+segments from one NVR camera (640x480, about 7 frames a second), almost every
+faint rhythm the lens found turned out to be the camera's own. Learn these
+before taking any finding as the world's:
+
+| habit | how it shows in a report | how the report handles it |
+|---|---|---|
+| fresh picture | the whole picture faintly lifted at one rate and all its multiples, e.g. every 4 s: the camera writing a full new picture (a keyframe) | named as a comb; finds at a multiple, a half or a third of its rate say "probably the camera's" |
+| uneven frame timing | frames 0.13 and 0.17 s apart in a pattern that repeats once a second; real motion is copied faintly to rates mirrored about it | mirrored pairs in the same place are listed last as probably the camera's |
+| printed clock | brightness, shift and texture rhythms at 0.2 to 0.6 a second in one corner | found from its digits flipping once a second; listed last as the clock, never voiced |
+| compression breathing | a slow rhythm (every 12 to 13 s here) in many places and channels, its speed changing a little from segment to segment; in some segments the whole picture rises and falls with it, and so does the number of bytes the camera spends per frame | not yet labelled: recognise it by those signs. Likely the encoder keeping its bit rate on target |
+| mount sway or stabilisation | a slow shift (every 10 s here) in which the whole picture moves together | not yet labelled: a shift the whole picture shares is the camera moving |
+| night mode | colour channels empty | said in the report; colour is left out |
+
+Two things to check on the recorder: whether the camera uses variable or
+constant bit rate (switching it, or the bit rate, moves or removes the
+breathing if it is the encoder), and how the camera is mounted.
+
+Sensitivity depends on the rate. On this camera the half-level flicker above,
+at 1.7 a second, was found with a chance of luck too small to print; a flicker
+planted at one every 12 s was missed at ±0.2 levels and found at ±0.3: wind
+and light crowd the slow end. A quiet report means nothing above
+those sizes, not nothing at all. A phone on a tripod (30 or 60 even frames a
+second, lighter compression) is a much better eye than an NVR.
+
 ### Hidden pictures
 
 Pictures that people deliberately draw into a sound often sit above the default

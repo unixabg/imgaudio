@@ -326,6 +326,24 @@ convert look.png -auto-level \
 still cancels and only motion is left, then turns that motion into sound. A
 still scene is silent; wind in a tree is heard as it moves through the frame.
 
+**For a fixed camera.** Everything here, the motion lenses included, watches
+fixed places in the picture over time: the same patch always shows the same
+leaf or the same bit of wall, and what changes there is the reading. Physicists
+call this the *Eulerian* view, after Leonhard Euler: stand still and watch the
+river flow past one spot. It is also the view of the MIT work this builds on
+(Eulerian video magnification, 2012; the visual microphone, 2014). Use a camera
+on a wall, a pole or a tripod. A small bump or a gentle sway is tolerated:
+`euler` notices a jolted camera and leaves those moments out, and a rhythm the
+whole picture shares is named as the camera's. A camera that travels, in a
+vehicle or in a hand, is a different case: each patch then shows the scenery
+sliding past, near things faster than far ones, so no fixed patch holds still
+and no single correction steadies the whole frame. That needs the *Lagrangian*
+view, after Joseph-Louis Lagrange: ride along with each thing and follow it
+(tracking points, optical flow, rebuilding the scene's depth). imgaudio does
+not do that. From a moving camera, only what rides with it (a dashboard, a
+hood, a mirror mount) stays fixed in the frame and can be read, and it tells
+about the vehicle, not the world.
+
 ```bash
 # real time: height in the frame becomes pitch, top = high; put it back on the video
 python3 motion.py profile wind.mp4 wind.wav --mux wind-heard.mp4
